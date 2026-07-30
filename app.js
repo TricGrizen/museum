@@ -135,12 +135,17 @@
     return String(text == null ? '' : text).trim() !== '目录';
   }
 
+  // 引用块内的 H2 是被引述的他册标题，不计入本册章节（其 id 照常保留）
+  function isQuotedHeading(node) {
+    return !!(node && node.closest && node.closest('blockquote'));
+  }
+
   var TEST = {
     slugify: slugify, makeSlugger: makeSlugger, isExternal: isExternal,
     splitHash: splitHash, resolvePath: resolvePath, mapHref: mapHref,
     pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct, fmtWan: fmtWan,
     fmtMD: fmtMD, bookMetaLine: bookMetaLine, isChapterHeading: isChapterHeading,
-    FONT_STEPS: FONT_STEPS
+    isQuotedHeading: isQuotedHeading, FONT_STEPS: FONT_STEPS
   };
   if (typeof window !== 'undefined') window.__museum_test = TEST;
   else if (typeof globalThis !== 'undefined') globalThis.__museum_test = TEST;
@@ -550,7 +555,7 @@
       var id = slug(hs[i].textContent || '');
       hs[i].id = id;
       ids[id] = true;
-      if (hs[i].tagName === 'H2') {
+      if (hs[i].tagName === 'H2' && !isQuotedHeading(hs[i])) {
         var htext = (hs[i].textContent || '').trim();
         if (isChapterHeading(htext)) curChapters.push({ id: id, text: htext });
       }
