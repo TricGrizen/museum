@@ -113,7 +113,16 @@
 
   function fmtPct(pct) { return Math.round(clamp(pct, 0, 1) * 100) + '%'; }
 
-  // 封面书名：按首个 「——」或「 · 」拆主/副；h1 为空则退回 title
+  // 弱前缀：本身不成书名的分类/序号段，降级为封面眉标而非主名
+  var WEAK_PREFIX = [/^闲聊$/, /^第\s*\d+\s*[课讲]$/, /^\d{4}-\d{2}-\d{2}$/, /^入门课程$/];
+
+  function isWeakPrefix(s) {
+    for (var i = 0; i < WEAK_PREFIX.length; i++) if (WEAK_PREFIX[i].test(s)) return true;
+    return false;
+  }
+
+  // 封面书名：按首个 「——」或「 · 」拆；左段命中弱前缀 → 左作眉标、右作主名（无副名），
+  // 否则左=主名、右=副名。无分隔符 → 整体主名；h1 为空则退回 title。
   function splitTitle(b) {
     var t = String((b && b.h1) || '').trim();
     if (!t) t = String((b && b.title) || '').trim();
@@ -122,8 +131,11 @@
     var at = -1, len = 0;
     if (iDash >= 0 && (iDot < 0 || iDash < iDot)) { at = iDash; len = 2; }
     else if (iDot >= 0) { at = iDot; len = 3; }
-    if (at <= 0) return { main: t, sub: '' };
-    return { main: t.slice(0, at).trim(), sub: t.slice(at + len).trim() };
+    if (at <= 0) return { over: '', main: t, sub: '' };
+    var left = t.slice(0, at).trim();
+    var right = t.slice(at + len).trim();
+    if (right && isWeakPrefix(left)) return { over: left, main: right, sub: '' };
+    return { over: '', main: left, sub: right };
   }
 
   // 书架分节：无 group 的档案在前（一节，无节头），其后按出现顺序每个 group 一节
@@ -520,6 +532,12 @@
           var cover = document.createElement('div');
           cover.className = 'cover';
           var parts = splitTitle(b);
+          if (parts.over) {
+            var ov = document.createElement('div');
+            ov.className = 'cover-o';
+            ov.textContent = parts.over;
+            cover.appendChild(ov);
+          }
           var t = document.createElement('div');
           t.className = 'cover-t';
           t.textContent = parts.main;
@@ -651,7 +669,7 @@
     var back = document.createElement('button');
     back.type = 'button';
     back.className = 'doc-back';
-    back.textContent = '返回书架';
+    back.textContent = '书库';
     back.addEventListener('click', function () { location.hash = '#/'; });
     host.appendChild(back);
 
