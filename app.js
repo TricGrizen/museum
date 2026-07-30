@@ -180,7 +180,7 @@
   var chromeOn = false, chromeTimer = null;
   var posTimer = null, rafPending = false, shelfTimer = null;
   var shelfStaggered = false;
-  var busy = false, pinTimer = null, navBusy = false, fadeGen = 0;
+  var busy = false, pinTimer = null, navBusy = false, activeScreen = null;
   var el = {};
 
   function ls(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -814,8 +814,8 @@
 
   function crossFade(outEl, inEl, prep, slow) {
     var dur = slow ? 400 : 200;
-    // 作废上一次切换的收尾（快速连点时不能让旧定时器把新页面藏掉）
-    var gen = ++fadeGen;
+    // 快速连点：旧定时器不得藏掉新页面，但仍要把真正退场的那屏收拾干净
+    activeScreen = inEl;
     if (outEl) outEl.style.cssText = '';
     inEl.style.cssText = '';
     if (!outEl || outEl === inEl) {
@@ -844,11 +844,14 @@
       });
     });
     setTimeout(function () {
-      if (gen !== fadeGen) return;      // 期间又切了一次 → 收尾交给新的那次
-      outEl.hidden = true;
-      outEl.style.cssText = '';
-      inEl.style.transition = '';
-      inEl.style.opacity = '';
+      if (outEl !== activeScreen) {     // outEl 已被新切换重新启用时不能藏
+        outEl.hidden = true;
+        outEl.style.cssText = '';
+      }
+      if (inEl === activeScreen) {
+        inEl.style.transition = '';
+        inEl.style.opacity = '';
+      }
     }, dur + 40);
   }
 
