@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>museum</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="museum">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="app.css?v=202607300000">
+</head>
+<body>
+
+<section class="screen unlock" id="scrUnlock">
+  <div class="unlock-box">
+    <img class="unlock-icon" src="icons/icon-192.png" alt="" width="84" height="84" draggable="false">
+    <div class="unlock-name">museum</div>
+    <form class="unlock-form" id="pinForm" autocomplete="off" novalidate>
+      <input class="pin" id="pin" type="text" inputmode="numeric" pattern="[0-9]*"
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+             enterkeyhint="go" aria-label="PIN">
+    </form>
+    <div class="dots" id="dots"><i></i><i></i><i></i></div>
+  </div>
+</section>
+
+<section class="screen shelf" id="scrShelf" hidden>
+  <header class="shelf-head">
+    <h1 class="shelf-title">museum</h1>
+    <div class="shelf-sub" id="shelfSub"></div>
+  </header>
+  <div id="contSlot"></div>
+  <div class="books" id="books"></div>
+</section>
+
+<section class="screen reader" id="scrRead" hidden>
+  <article class="doc" id="doc"></article>
+</section>
+
+<div class="chrome" id="chrome" hidden>
+  <div class="topbar" id="topbar">
+    <button class="tb-back" id="btnBack" type="button">&lsaquo; 书架</button>
+    <div class="tb-title" id="tbTitle"></div>
+  </div>
+  <div class="bottombar" id="bottombar">
+    <div class="bb-cell"><button class="bb-btn" id="btnToc" type="button">目录</button></div>
+    <div class="bb-cell bb-mid">
+      <button class="bb-font bb-font-sm" id="btnFontDown" type="button" aria-label="缩小字号">A&minus;</button>
+      <button class="bb-font bb-font-lg" id="btnFontUp" type="button" aria-label="放大字号">A＋</button>
+    </div>
+    <div class="bb-cell"><span class="bb-pct" id="pctLabel">0%</span></div>
+  </div>
+</div>
+
+<div class="sheet-wrap" id="sheetWrap" hidden>
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+  <div class="sheet" id="sheet"><nav class="sheet-list" id="sheetList"></nav></div>
+</div>
+
+<script src="marked.min.js?v=202607300000"></script>
+<script src="app.js?v=202607300000"></script>
+</body>
+</html>
