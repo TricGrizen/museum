@@ -11,6 +11,12 @@
   var K_LAST = 'museum:last';
   var K_POS = 'museum:pos:';
   var K_SHELF_Y = 'museum:shelf-y';
+  var K_TOPIC_Y = 'museum:topic-y';
+  var K_MEMOS = 'museum:memos';
+  var K_NOTES = 'museum:notes';
+  var K_HL = 'museum:highlights';
+  var K_MEMO_TS = 'museum:memo-ts';
+  var K_PAT = 'museum:pat';
   var CHROME_HIDE = 4000;
   var CHROME_INTRO = 2500;
   var POS_DEBOUNCE = 500;
@@ -19,11 +25,23 @@
   var PIN_IDLE = 700;
   var CHECK_PLAIN = 'museum-ok';
   var TAP_BAND = 0.55;                  // 纵向中部 55%
+  var CTX_LEN = 20;                     // 锚定上下文长度
+  var SNIP_LEN = 18;                    // 命中片段前后长度
+  var FIND_WAIT = 150;
+  var SYNC_WAIT = 3000;
+  var SYNC_REPO = 'TricGrizen/museum-sync';
+  var SYNC_API = 'https://api.github.com/repos/' + SYNC_REPO + '/contents/';
+  var SYNC_FILE = { memos: 'memos.json', notes: 'notes.json', highlights: 'highlights.json' };
+  var HL_KEYS = ['y', 'g', 'b', 'p', 'v'];
 
   // 与顶栏返回键同一字形（静态常量，无外部输入）
   var CHEVRON_SVG =
     '<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
     '<path d="M15.5 4.5 8 12l7.5 7.5" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var CHEVRON_R_SVG =
+    '<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<path d="M9 4.5 16.5 12 9 19.5" fill="none" stroke="currentColor" stroke-width="2" ' +
     'stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   /* ─────────── 纯函数（node 可直测） ─────────── */
@@ -126,6 +144,24 @@
     return m ? m[2] + '-' + m[3] : String(date || '');
   }
 
+  // 北京时间（与设备时区无关）：MM-DD HH:mm
+  function bjt(ms) {
+    var d = new Date(Number(ms) || 0);
+    var f = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    });
+    var p = {}, parts = f.formatToParts(d);
+    for (var i = 0; i < parts.length; i++) p[parts[i].type] = parts[i].value;
+    return p.month + '-' + p.day + ' ' + p.hour + ':' + p.minute;
+  }
+
+  // 条目时间行：北京时间 +（有编辑时）改n
+  function stampOf(it) {
+    var n = it && it.edits ? it.edits.length : 0;
+    return bjt(it ? it.createdAt : 0) + (n > 0 ? ' · 改' + n : '');
+  }
+
   // 列表第二行：裸值元数据。档案 `MM-DD · n问 · x.x万字`（qcount=0 省略 n问 段）；
   // 课程册只给 `x.x万字`（讲次在行首 token，日期不重复）。零描述性文字。
   function rowMeta(b) {
@@ -135,6 +171,13 @@
     var s = fmtMD(b.date);
     if (b.qcount > 0) s += ' · ' + b.qcount + '问';
     return s + ' · ' + wan;
+  }
+
+  // 课程入口行第二行：n讲 · x.x万字（合计）
+  function topicMeta(items) {
+    var n = (items || []).length, sum = 0;
+    for (var i = 0; i < n; i++) sum += (items[i].chars || 0);
+    return n + '讲 · ' + fmtWan(sum) + '万字';
   }
 
   // 弱前缀：本身不成书名的分类/序号段，降级为行首 token 而非主名
@@ -162,7 +205,16 @@
     return { over: '', main: left, sub: right };
   }
 
-  // 书架分节：无 group 的档案在前（一节，无节头），其后按出现顺序每个 group 一节
+  // 闲聊册：不出 token，书名走略斜体
+  function isChatBook(b) { return splitTitle(b).over === '闲聊'; }
+
+  // 行首 token：闲聊的分类词不出现，其余弱前缀（日期等）保留
+  function rowToken(b) {
+    var o = splitTitle(b).over;
+    return o === '闲聊' ? '' : o;
+  }
+
+  // 分节：无 group 的档案在前，其后按出现顺序每个 group 一节（key 取源前缀，供二级页路由）
   function shelfSections(books) {
     var plain = [], byGroup = {}, order = [], i;
     for (i = 0; i < (books || []).length; i++) {
@@ -172,8 +224,11 @@
       byGroup[b.group].push(b);
     }
     var out = [];
-    if (plain.length) out.push({ group: null, items: plain });
-    for (i = 0; i < order.length; i++) out.push({ group: order[i], items: byGroup[order[i]] });
+    if (plain.length) out.push({ group: null, key: '', items: plain });
+    for (i = 0; i < order.length; i++) {
+      var items = byGroup[order[i]];
+      out.push({ group: order[i], key: String(items[0].src || '').split('/')[0], items: items });
+    }
     return out;
   }
 
@@ -250,22 +305,104 @@
     return !!(node && node.closest && node.closest('blockquote'));
   }
 
-  var TEST = {
-    slugify: slugify, makeSlugger: makeSlugger, isExternal: isExternal,
-    splitHash: splitHash, resolvePath: resolvePath, mapHref: mapHref,
-    pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct, fmtWan: fmtWan, fmtMD: fmtMD,
-    rowMeta: rowMeta, splitTitle: splitTitle, shelfSections: shelfSections,
-    fixCjkStrong: fixCjkStrong, fixInlineLine: fixInlineLine, fenceOf: fenceOf,
-    isChapterHeading: isChapterHeading, isQuotedHeading: isQuotedHeading,
-    FONT_STEPS: FONT_STEPS
-  };
-  if (typeof window !== 'undefined') window.__museum_test = TEST;
-  else if (typeof globalThis !== 'undefined') globalThis.__museum_test = TEST;
+  /* ── 标注：锚定、检索、合并 ── */
 
-  /* ─────────── base64 / 加密 ─────────── */
+  function headLen(a, b) {
+    var n = Math.min(a.length, b.length), i = 0;
+    while (i < n && a.charAt(i) === b.charAt(i)) i++;
+    return i;
+  }
+
+  function tailLen(a, b) {
+    var n = Math.min(a.length, b.length), i = 0;
+    while (i < n && a.charAt(a.length - 1 - i) === b.charAt(b.length - 1 - i)) i++;
+    return i;
+  }
+
+  // quote + 前后文重定位：同段多命中时取上下文吻合度最高者；找不到返回 -1（orphan，不渲染不丢数据）
+  function locateQuote(text, h) {
+    var s = String(text == null ? '' : text);
+    var q = h && h.quote ? String(h.quote) : '';
+    if (!q) return -1;
+    var pre = String((h && h.prefix) || ''), suf = String((h && h.suffix) || '');
+    var best = -1, bestScore = -1, from = 0;
+    for (;;) {
+      var i = s.indexOf(q, from);
+      if (i < 0) break;
+      var score = tailLen(s.slice(Math.max(0, i - pre.length), i), pre) +
+                  headLen(s.slice(i + q.length, i + q.length + suf.length), suf);
+      if (score > bestScore) { bestScore = score; best = i; }
+      from = i + 1;
+    }
+    return best;
+  }
+
+  // 命中片段：前后各 SNIP_LEN 字，越界加省略号
+  function makeSnippet(text, at, qlen, ctx) {
+    var s = String(text == null ? '' : text);
+    var c = ctx == null ? SNIP_LEN : ctx;
+    var a = Math.max(0, at - c), b = Math.min(s.length, at + qlen + c);
+    return {
+      before: (a > 0 ? '…' : '') + s.slice(a, at),
+      hit: s.slice(at, at + qlen),
+      after: s.slice(at + qlen, b) + (b < s.length ? '…' : '')
+    };
+  }
+
+  // md → 供检索与滚动定位的纯文本（与渲染后 textContent 近似）
+  function plainOf(md) {
+    var t = String(md == null ? '' : md);
+    t = t.replace(/```[\s\S]*?```/g, ' ');
+    t = t.replace(/`([^`\n]*)`/g, '$1');
+    t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ');
+    t = t.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+    t = t.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+    t = t.replace(/^\s{0,3}>\s?/gm, '');
+    t = t.replace(/^\s{0,3}(?:[-*_][ \t]*){3,}$/gm, ' ');
+    t = t.replace(/\*\*|__|~~/g, '');
+    t = t.replace(/\|/g, ' ');
+    t = t.replace(/\s+/g, ' ');
+    return t.trim();
+  }
+
+  function itemTime(it) {
+    if (!it) return 0;
+    return it.deletedAt || it.updatedAt || it.createdAt || 0;
+  }
+
+  // 按 id 合并两侧条目：updatedAt/deletedAt 新者胜；墓碑保留以传播删除
+  function mergeItems(a, b) {
+    var map = {}, out = [], i, k;
+    var add = function (it) {
+      if (!it || !it.id) return;
+      var cur0 = map[it.id];
+      if (!cur0 || itemTime(it) > itemTime(cur0)) map[it.id] = it;
+    };
+    for (i = 0; i < (a || []).length; i++) add(a[i]);
+    for (i = 0; i < (b || []).length; i++) add(b[i]);
+    for (k in map) if (Object.prototype.hasOwnProperty.call(map, k)) out.push(map[k]);
+    out.sort(function (x, y) { return (x.createdAt || 0) - (y.createdAt || 0); });
+    return out;
+  }
+
+  function liveOf(items) {
+    var out = [];
+    for (var i = 0; i < (items || []).length; i++) {
+      if (items[i] && items[i].id && !items[i].deletedAt) out.push(items[i]);
+    }
+    return out;
+  }
+
+  function syncUrl(file) { return SYNC_API + file; }
+
+  function newId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  /* ─────────── base64 ─────────── */
 
   function b64ToBytes(b64) {
-    var bin = atob(String(b64));
+    var bin = atob(String(b64).replace(/\s+/g, ''));
     var u = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
     return u;
@@ -276,6 +413,68 @@
     for (var i = 0; i < u.length; i += CH) s += String.fromCharCode.apply(null, u.subarray(i, i + CH));
     return btoa(s);
   }
+
+  function utf8ToB64(str) { return bytesToB64(new TextEncoder().encode(String(str))); }
+  function b64ToUtf8(b64) { return new TextDecoder('utf-8').decode(b64ToBytes(b64)); }
+
+  /* 同步一次：GET（取 sha + 远端）→ 合并 → PUT（带 sha 乐观并发）；409/422 → 重取重试。
+     依赖注入（fetchFn/pat/items），便于在 node 里用 mock fetch 直测。 */
+  function pushFile(o) {
+    var f = o.fetchFn, tries = 0, maxTry = o.maxTry == null ? 3 : o.maxTry;
+    var head = {
+      'Authorization': 'Bearer ' + o.pat,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+    var attemptOnce = function () {
+      tries++;
+      return f(o.url, { method: 'GET', headers: head, cache: 'no-store' })
+        .then(function (r) {
+          if (r.status === 404) return { sha: null, items: [] };
+          if (!r.ok) throw new Error('get ' + r.status);
+          return r.json().then(function (j) {
+            var items = [];
+            try { items = (JSON.parse(b64ToUtf8(j.content)) || {}).items || []; } catch (e) { items = []; }
+            return { sha: j.sha, items: items };
+          });
+        })
+        .then(function (remote) {
+          var merged = mergeItems(o.items, remote.items);
+          var body = {
+            message: o.message,
+            content: utf8ToB64(JSON.stringify({ v: 1, items: merged }, null, 1) + '\n')
+          };
+          if (remote.sha) body.sha = remote.sha;
+          return f(o.url, { method: 'PUT', headers: head, body: JSON.stringify(body) })
+            .then(function (r) {
+              if (r.ok) return { ok: true, items: merged, tries: tries };
+              if ((r.status === 409 || r.status === 422) && tries < maxTry) return attemptOnce();
+              return { ok: false, status: r.status, items: merged, tries: tries };
+            });
+        });
+    };
+    return attemptOnce();
+  }
+
+  var TEST = {
+    slugify: slugify, makeSlugger: makeSlugger, isExternal: isExternal,
+    splitHash: splitHash, resolvePath: resolvePath, mapHref: mapHref,
+    pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct, fmtWan: fmtWan, fmtMD: fmtMD,
+    rowMeta: rowMeta, topicMeta: topicMeta, splitTitle: splitTitle, shelfSections: shelfSections,
+    isChatBook: isChatBook, rowToken: rowToken,
+    fixCjkStrong: fixCjkStrong, fixInlineLine: fixInlineLine, fenceOf: fenceOf,
+    isChapterHeading: isChapterHeading, isQuotedHeading: isQuotedHeading,
+    bjt: bjt, stampOf: stampOf, locateQuote: locateQuote, makeSnippet: makeSnippet,
+    plainOf: plainOf, mergeItems: mergeItems, liveOf: liveOf, itemTime: itemTime,
+    syncUrl: syncUrl, pushFile: pushFile, utf8ToB64: utf8ToB64, b64ToUtf8: b64ToUtf8,
+    HL_KEYS: HL_KEYS, FONT_STEPS: FONT_STEPS
+  };
+  if (typeof window !== 'undefined') window.__museum_test = TEST;
+  else if (typeof globalThis !== 'undefined') globalThis.__museum_test = TEST;
+
+  if (typeof document === 'undefined') return;      // node 直测：纯函数就位，UI 不启动
+
+  /* ─────────── 加密 ─────────── */
 
   function deriveBits(pass, salt, iters) {
     return crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits'])
@@ -299,19 +498,34 @@
   /* ─────────── 运行时状态 ─────────── */
 
   var KEY = null, META = null, BOOKS = [], BY_ID = {}, SRC_INDEX = {};
-  var MD_CACHE = {};
-  var view = 'unlock';                  // unlock | shelf | read
+  var MD_CACHE = {}, PLAIN_CACHE = {};
+  var view = 'unlock';                  // unlock | shelf | topic | memo | read
   var cur = null;                       // 当前书 meta
-  var curChapters = [];
+  var curChapters = [], curTopic = null;
   var fontIdx = FONT_DEFAULT;
   var chromeOn = false, chromeTimer = null;
-  var posTimer = null, rafPending = false, shelfTimer = null;
+  var posTimer = null, rafPending = false, shelfTimer = null, topicTimer = null;
   var busy = false, pinTimer = null, navBusy = false, activeScreen = null;
+  var findTimer = null, findQuery = '', pendingFind = null, searching = false, noteAfterOpen = false;
+  var syncTimer = {}, patAsked = false;
+  var capSel = null, capId = null, hlOrphans = 0;
+  var editCtx = null;                   // {kind:'memo'|'note', id}
   var el = {};
 
   function ls(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
   function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+  function loadStore(k) {
+    var raw = ls(k);
+    if (!raw) return { v: 1, items: [] };
+    try {
+      var o = JSON.parse(raw);
+      return (o && Array.isArray(o.items)) ? o : { v: 1, items: [] };
+    } catch (e) { return { v: 1, items: [] }; }
+  }
+
+  function saveStore(k, store) { lsSet(k, JSON.stringify(store)); }
 
   function readPos(id) {
     var raw = ls(K_POS + id);
@@ -337,24 +551,25 @@
       location.replace('https://' + location.host + location.pathname + location.search + location.hash);
       return;
     }
-    el.unlock = document.getElementById('scrUnlock');
-    el.shelf = document.getElementById('scrShelf');
-    el.read = document.getElementById('scrRead');
-    el.doc = document.getElementById('doc');
-    el.pin = document.getElementById('pin');
-    el.pinForm = document.getElementById('pinForm');
+    var $ = function (id) { return document.getElementById(id); };
+    el.unlock = $('scrUnlock'); el.shelf = $('scrShelf'); el.read = $('scrRead');
+    el.topic = $('scrTopic'); el.memo = $('scrMemo');
+    el.doc = $('doc'); el.pin = $('pin'); el.pinForm = $('pinForm');
     el.unlockBox = document.querySelector('.unlock-box');
-    el.books = document.getElementById('books');
-    el.chrome = document.getElementById('chrome');
-    el.topbar = document.getElementById('topbar');
-    el.btnBack = document.getElementById('btnBack');
-    el.btnToc = document.getElementById('btnToc');
-    el.btnFontDown = document.getElementById('btnFontDown');
-    el.btnFontUp = document.getElementById('btnFontUp');
-    el.pctLabel = document.getElementById('pctLabel');
-    el.sheetWrap = document.getElementById('sheetWrap');
-    el.sheetList = document.getElementById('sheetList');
-    el.sheetBackdrop = document.getElementById('sheetBackdrop');
+    el.books = $('books'); el.hits = $('hits');
+    el.searchWrap = $('searchWrap'); el.searchInput = $('searchInput'); el.searchClear = $('searchClear');
+    el.topicList = $('topicList'); el.topicBack = $('topicBack');
+    el.memoDoc = $('memoDoc'); el.memoBack = $('memoBack'); el.memoBar = $('memoBar');
+    el.memoInput = $('memoInput'); el.btnClock = $('btnClock'); el.btnMemoSend = $('btnMemoSend');
+    el.chrome = $('chrome'); el.topbar = $('topbar');
+    el.btnBack = $('btnBack'); el.btnToc = $('btnToc'); el.btnNote = $('btnNote');
+    el.btnFontDown = $('btnFontDown'); el.btnFontUp = $('btnFontUp'); el.pctLabel = $('pctLabel');
+    el.sheetWrap = $('sheetWrap'); el.sheetList = $('sheetList'); el.sheetBackdrop = $('sheetBackdrop');
+    el.noteWrap = $('noteWrap'); el.noteList = $('noteList'); el.noteBackdrop = $('noteBackdrop');
+    el.noteInput = $('noteInput'); el.btnNoteSend = $('btnNoteSend');
+    el.editWrap = $('editWrap'); el.editText = $('editText'); el.editBackdrop = $('editBackdrop');
+    el.btnSave = $('btnSave'); el.btnDel = $('btnDel');
+    el.cap = $('cap'); el.capDel = $('capDel');
 
     var f = parseInt(ls(K_FONT), 10);
     fontIdx = (f >= 0 && f < FONT_STEPS.length) ? f : FONT_DEFAULT;
@@ -380,9 +595,36 @@
 
     el.btnBack.addEventListener('click', function () { bumpChrome(); location.hash = '#/'; });
     el.btnToc.addEventListener('click', function () { bumpChrome(); openSheet(); });
+    el.btnNote.addEventListener('click', function () { bumpChrome(); openNotes(); });
     el.btnFontDown.addEventListener('click', function () { bumpChrome(); setFont(fontIdx - 1); });
     el.btnFontUp.addEventListener('click', function () { bumpChrome(); setFont(fontIdx + 1); });
     el.sheetBackdrop.addEventListener('click', closeSheet);
+    el.noteBackdrop.addEventListener('click', closeNotes);
+    el.editBackdrop.addEventListener('click', closeEdit);
+
+    el.topicBack.addEventListener('click', function () { location.hash = '#/'; });
+    el.memoBack.addEventListener('click', function () { location.hash = '#/'; });
+
+    el.searchInput.addEventListener('input', onSearchInput);
+    el.searchClear.addEventListener('click', clearSearch);
+
+    el.btnClock.addEventListener('click', toggleStamps);
+    el.btnMemoSend.addEventListener('click', addMemo);
+    el.memoInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); addMemo(); }
+    });
+    el.btnNoteSend.addEventListener('click', addNote);
+    el.noteInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); addNote(); }
+    });
+    el.btnSave.addEventListener('click', saveEdit);
+    el.btnDel.addEventListener('click', delEdit);
+
+    var dots = el.cap.querySelectorAll('.cap-dot');
+    for (var i = 0; i < dots.length; i++) {
+      (function (d) { d.addEventListener('click', function () { pickColor(d.getAttribute('data-c')); }); })(dots[i]);
+    }
+    el.capDel.addEventListener('click', dropHighlight);
 
     el.doc.addEventListener('click', onDocClick);
     window.addEventListener('hashchange', route);
@@ -502,107 +744,334 @@
   // 解锁成功 → 进入路由目标（400ms 淡出）
   function enter(fromUnlock) {
     var h = parseHash();
-    if (h.id && BY_ID[h.id]) {
+    if (h.view === 'read' && BY_ID[h.id]) {
       openBook(h.id, el.unlock, !!fromUnlock);
+    } else if (h.view === 'topic' && topicOf(h.key)) {
+      renderTopic(h.key);
+      crossFade(el.unlock, el.topic, function () { window.scrollTo(0, 0); }, !!fromUnlock);
+      view = 'topic';
+    } else if (h.view === 'memo') {
+      renderMemo();
+      crossFade(el.unlock, el.memo, function () { window.scrollTo(0, 0); }, !!fromUnlock);
+      view = 'memo';
+      el.memoBar.hidden = false;
     } else {
-      if (h.id) location.replace('#/');
+      if (h.view !== 'shelf') location.replace('#/');
       renderShelf();
-      crossFade(el.unlock, el.shelf, function () { window.scrollTo(0, 0); }, !!fromUnlock);
+      crossFade(el.unlock, el.shelf, function () { window.scrollTo(0, searchH()); }, !!fromUnlock);
       view = 'shelf';
     }
     schedulePrefetch();
+    syncPullAll();
   }
 
   /* ─────────── 路由 ─────────── */
 
   function parseHash() {
-    var m = /^#\/read\/([0-9a-f]{4,})$/.exec(location.hash || '');
-    return { id: m ? m[1] : null };
+    var h = location.hash || '';
+    var m = /^#\/read\/([0-9a-f]{4,})$/.exec(h);
+    if (m) return { view: 'read', id: m[1] };
+    m = /^#\/topic\/([A-Za-z0-9_-]+)$/.exec(h);
+    if (m) return { view: 'topic', key: m[1] };
+    if (/^#\/memo$/.test(h)) return { view: 'memo' };
+    return { view: 'shelf' };
+  }
+
+  function topicOf(key) {
+    var secs = shelfSections(BOOKS);
+    for (var i = 0; i < secs.length; i++) if (secs[i].group && secs[i].key === key) return secs[i];
+    return null;
+  }
+
+  function screenOf(v) {
+    return v === 'read' ? el.read : v === 'topic' ? el.topic : v === 'memo' ? el.memo :
+      v === 'unlock' ? el.unlock : el.shelf;
+  }
+
+  function leaveCur() {
+    if (view === 'read') { flushPos(); hideChrome(true); closeSheet(); closeNotes(); hideCap(); }
+    if (view === 'topic') { clearTimeout(topicTimer); saveTopicY(); }
+    if (view === 'memo') el.memoBar.hidden = true;
+    if (view === 'shelf') { clearTimeout(shelfTimer); saveShelfY(); }
   }
 
   function route() {
     if (!KEY) return;
     var h = parseHash();
-    if (h.id && BY_ID[h.id]) {
+    if (h.view === 'read' && BY_ID[h.id]) {
       if (view === 'read' && cur && cur.id === h.id) return;
-      openBook(h.id, view === 'shelf' ? el.shelf : el.read, false);
-    } else {
-      if (view === 'shelf') return;
-      backToShelf();
+      openBook(h.id, screenOf(view), false);
+      return;
     }
+    if (h.view === 'topic' && topicOf(h.key)) {
+      if (view === 'topic' && curTopic === h.key) return;
+      var from = view;
+      leaveCur();
+      renderTopic(h.key);
+      crossFade(screenOf(from), el.topic, function () {
+        var y = 0;
+        if (from !== 'shelf') {
+          try { y = parseInt(sessionStorage.getItem(K_TOPIC_Y) || '0', 10) || 0; } catch (e) { y = 0; }
+        }
+        window.scrollTo(0, y);
+      }, false);
+      view = 'topic';
+      return;
+    }
+    if (h.view === 'memo') {
+      if (view === 'memo') return;
+      var from2 = view;
+      leaveCur();
+      renderMemo();
+      crossFade(screenOf(from2), el.memo, function () { window.scrollTo(0, 0); }, false);
+      view = 'memo';
+      el.memoBar.hidden = false;
+      return;
+    }
+    if (view === 'shelf') return;
+    backToShelf();
   }
 
-  /* ─────────── 书架 ─────────── */
+  /* ─────────── 首页 ─────────── */
+
+  function searchH() { return el.searchWrap ? el.searchWrap.offsetHeight : 0; }
+
+  function mkRow(opt) {
+    var row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'row' + (opt.single ? ' row-single' : '');
+    var l1 = document.createElement('div');
+    l1.className = 'row-1';
+    if (opt.token) {
+      var tk = document.createElement('span');
+      tk.className = 'row-token';
+      tk.textContent = opt.token;
+      l1.appendChild(tk);
+    }
+    var t = document.createElement('span');
+    t.className = 'row-title' + (opt.slant ? ' is-slant' : '');
+    t.textContent = opt.title;
+    l1.appendChild(t);
+    if (opt.pct) {
+      var p = document.createElement('span');
+      p.className = 'row-pct';
+      p.textContent = opt.pct;
+      l1.appendChild(p);
+    }
+    if (opt.chevron) {
+      var g = document.createElement('span');
+      g.className = 'row-chev';
+      g.innerHTML = CHEVRON_R_SVG;
+      l1.appendChild(g);
+    }
+    row.appendChild(l1);
+    if (opt.meta) {
+      var l2 = document.createElement('div');
+      l2.className = 'row-2';
+      l2.textContent = opt.meta;
+      row.appendChild(l2);
+    }
+    row.addEventListener('click', opt.onTap);
+    return row;
+  }
+
+  function bookRow(b) {
+    var pos = readPos(b.id);
+    return mkRow({
+      token: rowToken(b), title: splitTitle(b).main, slant: isChatBook(b),
+      pct: pos ? fmtPct(pos.pct) : '', meta: rowMeta(b),
+      onTap: function () { go(b.id); }
+    });
+  }
 
   function renderShelf() {
     el.books.textContent = '';
-    var secs = shelfSections(BOOKS);
-    for (var s = 0; s < secs.length; s++) {
-      if (secs[s].group) {
-        var head = document.createElement('div');
-        head.className = 'sec-head';
-        head.textContent = secs[s].group;
-        el.books.appendChild(head);
-      }
-      var list = document.createElement('div');
-      list.className = 'list';
-      var items = secs[s].items;
-      for (var i = 0; i < items.length; i++) {
-        (function (b) {
-          var pos = readPos(b.id);
-          var parts = splitTitle(b);
-          var row = document.createElement('button');
-          row.type = 'button';
-          row.className = 'row';
+    var list = document.createElement('div');
+    list.className = 'list';
 
-          var l1 = document.createElement('div');
-          l1.className = 'row-1';
-          if (parts.over) {
-            var tk = document.createElement('span');
-            tk.className = 'row-token';
-            tk.textContent = parts.over;
-            l1.appendChild(tk);
-          }
-          var t = document.createElement('span');
-          t.className = 'row-title';
-          t.textContent = parts.main;
-          l1.appendChild(t);
-          if (pos) {
-            var p = document.createElement('span');
-            p.className = 'row-pct';
-            p.textContent = fmtPct(pos.pct);
-            l1.appendChild(p);
-          }
+    list.appendChild(mkRow({
+      title: '备忘录', single: true,
+      onTap: function () { location.hash = '#/memo'; }
+    }));
 
-          var l2 = document.createElement('div');
-          l2.className = 'row-2';
-          l2.textContent = rowMeta(b);
-
-          row.appendChild(l1);
-          row.appendChild(l2);
-          row.addEventListener('click', function () { go(b.id); });
-          list.appendChild(row);
-        })(items[i]);
-      }
-      el.books.appendChild(list);
+    var secs = shelfSections(BOOKS), i, j;
+    for (i = 0; i < secs.length; i++) {
+      if (secs[i].group) continue;
+      for (j = 0; j < secs[i].items.length; j++) list.appendChild(bookRow(secs[i].items[j]));
     }
+    for (i = 0; i < secs.length; i++) {
+      if (!secs[i].group) continue;
+      (function (sec) {
+        list.appendChild(mkRow({
+          title: sec.group, meta: topicMeta(sec.items), chevron: true,
+          onTap: function () { location.hash = '#/topic/' + sec.key; }
+        }));
+      })(secs[i]);
+    }
+    el.books.appendChild(list);
+  }
+
+  function renderTopic(key) {
+    curTopic = key;
+    var sec = topicOf(key);
+    el.topicList.textContent = '';
+    if (!sec) return;
+    var list = document.createElement('div');
+    list.className = 'list';
+    for (var i = 0; i < sec.items.length; i++) list.appendChild(bookRow(sec.items[i]));
+    el.topicList.appendChild(list);
   }
 
   function go(id) { location.hash = '#/read/' + id; }
 
   function backToShelf() {
-    flushPos();
-    hideChrome(true);
-    closeSheet();
+    var from = view;
+    leaveCur();
     renderShelf();
     var y = 0;
     try { y = parseInt(sessionStorage.getItem(K_SHELF_Y) || '0', 10) || 0; } catch (e) { y = 0; }
-    crossFade(el.read, el.shelf, function () {
+    if (!y) y = searchH();
+    crossFade(screenOf(from), el.shelf, function () {
       var max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
       window.scrollTo(0, Math.min(y, max));
     }, false);
     view = 'shelf';
     cur = null;
+  }
+
+  /* ─────────── 检索 ─────────── */
+
+  function ensureAllPlain() {
+    var jobs = [];
+    for (var i = 0; i < BOOKS.length; i++) {
+      (function (b) {
+        if (PLAIN_CACHE[b.id]) return;
+        jobs.push(loadMd(b.id).then(function (md) { PLAIN_CACHE[b.id] = plainOf(md); }, function () {}));
+      })(BOOKS[i]);
+    }
+    return Promise.all(jobs);
+  }
+
+  function onSearchInput() {
+    var q = el.searchInput.value;
+    el.searchClear.hidden = !q;
+    clearTimeout(findTimer);
+    if (!q.trim()) { showList(); return; }
+    findTimer = setTimeout(function () { runSearch(q.trim()); }, FIND_WAIT);
+  }
+
+  function showList() {
+    findQuery = '';
+    searching = false;
+    el.hits.hidden = true;
+    el.hits.textContent = '';
+    el.books.hidden = false;
+  }
+
+  function clearSearch() {
+    el.searchInput.value = '';
+    el.searchClear.hidden = true;
+    clearTimeout(findTimer);
+    showList();
+    try { el.searchInput.blur(); } catch (e) {}
+    var y = 0;
+    try { y = parseInt(sessionStorage.getItem(K_SHELF_Y) || '0', 10) || 0; } catch (e) { y = 0; }
+    window.scrollTo(0, y || searchH());
+  }
+
+  function findAll(text, term, limit) {
+    var out = [], t = text.toLowerCase(), q = term.toLowerCase(), from = 0;
+    while (out.length < limit) {
+      var i = t.indexOf(q, from);
+      if (i < 0) break;
+      out.push(i);
+      from = i + q.length;
+    }
+    return out;
+  }
+
+  function runSearch(term) {
+    findQuery = term;
+    searching = true;
+    ensureAllPlain().then(function () {
+      if (findQuery !== term) return;
+      var rows = [], i, j;
+      for (i = 0; i < BOOKS.length; i++) {
+        var b = BOOKS[i], text = PLAIN_CACHE[b.id] || '';
+        var at = findAll(text, term, 3);
+        for (j = 0; j < at.length; j++) {
+          rows.push({ kind: 'book', book: b, text: text, at: at[j], len: term.length });
+        }
+      }
+      var memos = liveOf(loadStore(K_MEMOS).items);
+      for (i = 0; i < memos.length; i++) {
+        var mt = String(memos[i].text || '').replace(/\s+/g, ' ');
+        var ma = findAll(mt, term, 1);
+        if (ma.length) rows.push({ kind: 'memo', item: memos[i], text: mt, at: ma[0], len: term.length });
+      }
+      var notes = liveOf(loadStore(K_NOTES).items);
+      for (i = 0; i < notes.length; i++) {
+        var nt = String(notes[i].text || '').replace(/\s+/g, ' ');
+        var na = findAll(nt, term, 1);
+        if (na.length) rows.push({ kind: 'note', item: notes[i], text: nt, at: na[0], len: term.length });
+      }
+      paintHits(rows);
+    });
+  }
+
+  function paintHits(rows) {
+    el.hits.textContent = '';
+    el.books.hidden = true;
+    el.hits.hidden = false;
+    var list = document.createElement('div');
+    list.className = 'list';
+    for (var i = 0; i < rows.length; i++) {
+      (function (r) {
+        var snip = makeSnippet(r.text, r.at, r.len);
+        var name = '', slant = false, tap = null;
+        if (r.kind === 'book') {
+          name = splitTitle(r.book).main;
+          slant = isChatBook(r.book);
+          tap = function () {
+            pendingFind = {
+              quote: snip.hit,
+              prefix: snip.before.replace(/^…/, ''),
+              suffix: snip.after.replace(/…$/, '')
+            };
+            go(r.book.id);
+          };
+        } else if (r.kind === 'memo') {
+          name = '备忘录';
+          tap = function () { location.hash = '#/memo'; };
+        } else {
+          var nb = BY_ID[r.item.bookId];
+          name = '笔记 · ' + (nb ? splitTitle(nb).main : '');
+          tap = function () { if (nb) { noteAfterOpen = true; go(nb.id); } };
+        }
+        var row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'row';
+        var l1 = document.createElement('div');
+        l1.className = 'row-1';
+        var t = document.createElement('span');
+        t.className = 'row-title' + (slant ? ' is-slant' : '');
+        t.textContent = name;
+        l1.appendChild(t);
+        var l2 = document.createElement('div');
+        l2.className = 'row-2';
+        l2.appendChild(document.createTextNode(snip.before));
+        var em = document.createElement('b');
+        em.className = 'hit';
+        em.textContent = snip.hit;
+        l2.appendChild(em);
+        l2.appendChild(document.createTextNode(snip.after));
+        row.appendChild(l1);
+        row.appendChild(l2);
+        row.addEventListener('click', tap);
+        list.appendChild(row);
+      })(rows[i]);
+    }
+    el.hits.appendChild(list);
   }
 
   /* ─────────── 阅读 ─────────── */
@@ -619,13 +1088,14 @@
     var b = BY_ID[id];
     if (!b) { location.replace('#/'); return; }
     navBusy = true;
-    if (view === 'shelf') { clearTimeout(shelfTimer); saveShelfY(); }
-    if (view === 'read') flushPos();
+    leaveCur();
     loadMd(id).then(function (md) {
       cur = b;
       paintDoc(b, md);
       var pos = readPos(id);
       var pct = pos ? pos.pct : 0;
+      var find = pendingFind;
+      pendingFind = null;
       crossFade(fromEl, el.read, function () {
         window.scrollTo(0, pctToY(pct, document.documentElement.scrollHeight, window.innerHeight));
       }, !!slow);
@@ -634,6 +1104,8 @@
       paintPct();
       showChrome(CHROME_INTRO);
       navBusy = false;
+      if (find) setTimeout(function () { jumpToQuote(find); }, 60);
+      if (noteAfterOpen) { noteAfterOpen = false; setTimeout(openNotes, 260); }
     }).catch(function () {
       navBusy = false;
       if (view === 'unlock') { renderShelf(); crossFade(el.unlock, el.shelf, null, !!slow); view = 'shelf'; }
@@ -704,6 +1176,7 @@
     el.doc.style.fontSize = FONT_STEPS[fontIdx] + 'px';
     updateFontBtns();
     updateTocBtn();
+    applyHighlights(b.id);
   }
 
   function fixLink(a, b, ids) {
@@ -746,6 +1219,8 @@
   }
 
   function onDocClick(e) {
+    var mk = e.target.closest ? e.target.closest('mark[data-hl]') : null;
+    if (mk) { e.preventDefault(); openCapForMark(mk); return; }
     var a = e.target.closest ? e.target.closest('a[data-anchor]') : null;
     if (!a) return;
     e.preventDefault();
@@ -755,6 +1230,11 @@
   function jumpTo(id) {
     var node = id ? document.getElementById(id) : null;
     if (!node) { window.scrollTo(0, 0); return; }
+    scrollToNode(node);
+    savePos();
+  }
+
+  function scrollToNode(node) {
     var off = chromeOn ? (el.topbar.getBoundingClientRect().height + 8) : 12;
     var y = node.getBoundingClientRect().top + (window.pageYOffset || 0) - off;
     window.scrollTo(0, Math.max(0, Math.round(y)));
@@ -762,7 +1242,416 @@
     void node.offsetWidth;
     node.classList.add('hl');
     setTimeout(function () { node.classList.remove('hl'); }, 640);
-    savePos();
+  }
+
+  /* ── 文本节点索引：锚定、命中定位、包裹 ── */
+
+  function docNodes() {
+    var out = [];
+    var w = document.createTreeWalker(el.doc, NodeFilter.SHOW_TEXT, null);
+    var n;
+    while ((n = w.nextNode())) if (n.nodeValue && n.nodeValue.length) out.push(n);
+    return out;
+  }
+
+  function nodesText(nodes) {
+    var s = '';
+    for (var i = 0; i < nodes.length; i++) s += nodes[i].nodeValue;
+    return s;
+  }
+
+  function offsetOf(nodes, node, off) {
+    var pos = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i] === node) return pos + off;
+      pos += nodes[i].nodeValue.length;
+    }
+    return -1;
+  }
+
+  function nodeAt(nodes, at) {
+    var pos = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var len = nodes[i].nodeValue.length;
+      if (at < pos + len) return { node: nodes[i], off: at - pos };
+      pos += len;
+    }
+    return null;
+  }
+
+  function blockOf(node) {
+    var n = node;
+    while (n && n.parentNode !== el.doc) n = n.parentNode;
+    return n;
+  }
+
+  function wrapRange(nodes, start, end, cls, id) {
+    var pos = 0, made = [];
+    for (var i = 0; i < nodes.length && pos < end; i++) {
+      var n = nodes[i], len = n.nodeValue.length, s = pos, e = pos + len;
+      pos = e;
+      if (e <= start) continue;
+      var a = Math.max(start, s) - s, b = Math.min(end, e) - s;
+      if (b <= a) continue;
+      var node = n;
+      if (b < len) node.splitText(b);
+      if (a > 0) node = node.splitText(a);
+      var m = document.createElement('mark');
+      m.className = cls;
+      m.setAttribute('data-hl', id);
+      node.parentNode.insertBefore(m, node);
+      m.appendChild(node);
+      made.push(m);
+    }
+    return made;
+  }
+
+  function clearMarks() {
+    var ms = el.doc.querySelectorAll('mark[data-hl]');
+    for (var i = 0; i < ms.length; i++) {
+      var m = ms[i], p = m.parentNode;
+      while (m.firstChild) p.insertBefore(m.firstChild, m);
+      p.removeChild(m);
+      p.normalize();
+    }
+  }
+
+  function applyHighlights(bookId) {
+    clearMarks();
+    hlOrphans = 0;
+    var all = liveOf(loadStore(K_HL).items);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].bookId !== bookId) continue;
+      var nodes = docNodes(), text = nodesText(nodes);
+      var at = locateQuote(text, all[i]);
+      if (at < 0) { hlOrphans++; continue; }
+      wrapRange(nodes, at, at + all[i].quote.length, 'hl-' + all[i].color, all[i].id);
+    }
+  }
+
+  function jumpToQuote(find) {
+    var nodes = docNodes(), text = nodesText(nodes);
+    var at = locateQuote(text, find);
+    if (at < 0) at = text.indexOf(find.quote);
+    if (at < 0) return;
+    var hit = nodeAt(nodes, at);
+    if (!hit) return;
+    var host = hit.node.parentNode;
+    scrollToNode(host && host.nodeType === 1 ? host : el.doc);
+  }
+
+  /* ─────────── 标色 ─────────── */
+
+  function selectionInfo() {
+    var sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    var r = sel.getRangeAt(0);
+    if (!el.doc.contains(r.startContainer) || !el.doc.contains(r.endContainer)) return null;
+    if (blockOf(r.startContainer) !== blockOf(r.endContainer)) return null;   // 跨块级：拒绝
+    var q = sel.toString();
+    if (!q || !q.trim()) return null;
+    var nodes = docNodes(), text = nodesText(nodes);
+    var start = offsetOf(nodes, r.startContainer, r.startOffset);
+    if (start < 0 || text.substr(start, q.length) !== q) {
+      start = text.indexOf(q);
+      if (start < 0) return null;
+    }
+    return {
+      quote: q,
+      prefix: text.slice(Math.max(0, start - CTX_LEN), start),
+      suffix: text.slice(start + q.length, start + q.length + CTX_LEN),
+      rect: r.getBoundingClientRect()
+    };
+  }
+
+  function showCap(rect, withDel) {
+    el.capDel.hidden = !withDel;
+    el.cap.hidden = false;
+    el.cap.classList.add('is-on');
+    var w = el.cap.offsetWidth, h = el.cap.offsetHeight;
+    var x = clamp(rect.left + rect.width / 2 - w / 2, 8, Math.max(8, window.innerWidth - w - 8));
+    var y = rect.top - h - 10;
+    if (y < 8) y = rect.bottom + 10;                    // 越界翻到下方
+    y = clamp(y, 8, Math.max(8, window.innerHeight - h - 8));
+    el.cap.style.left = Math.round(x) + 'px';
+    el.cap.style.top = Math.round(y) + 'px';
+  }
+
+  function hideCap() {
+    el.cap.hidden = true;
+    el.cap.classList.remove('is-on');
+    capSel = null;
+    capId = null;
+  }
+
+  function openCapForMark(mk) {
+    var all = liveOf(loadStore(K_HL).items), it = null;
+    var id = mk.getAttribute('data-hl');
+    for (var i = 0; i < all.length; i++) if (all[i].id === id) it = all[i];
+    if (!it) return;
+    capSel = null;
+    capId = id;
+    showCap(mk.getBoundingClientRect(), true);
+  }
+
+  function pickColor(c) {
+    var store = loadStore(K_HL), now = Date.now(), i;
+    if (capId) {
+      for (i = 0; i < store.items.length; i++) {
+        if (store.items[i].id === capId) {
+          store.items[i].color = c;
+          store.items[i].updatedAt = now;
+        }
+      }
+    } else if (capSel) {
+      store.items.push({
+        id: newId(), bookId: cur ? cur.id : '', quote: capSel.quote,
+        prefix: capSel.prefix, suffix: capSel.suffix, color: c,
+        createdAt: now, updatedAt: now
+      });
+    } else { hideCap(); return; }
+    saveStore(K_HL, store);
+    try { window.getSelection().removeAllRanges(); } catch (e) {}
+    hideCap();
+    if (cur) applyHighlights(cur.id);
+    queueSync('highlights');
+  }
+
+  function dropHighlight() {
+    if (!capId) { hideCap(); return; }
+    var store = loadStore(K_HL), now = Date.now();
+    for (var i = 0; i < store.items.length; i++) {
+      if (store.items[i].id === capId) store.items[i] = { id: capId, deletedAt: now };
+    }
+    saveStore(K_HL, store);
+    hideCap();
+    if (cur) applyHighlights(cur.id);
+    queueSync('highlights');
+  }
+
+  /* ─────────── 备忘录 ─────────── */
+
+  function stampsOn() { return ls(K_MEMO_TS) === '1'; }
+
+  function toggleStamps() {
+    lsSet(K_MEMO_TS, stampsOn() ? '0' : '1');
+    renderMemo();
+  }
+
+  function renderMemo() {
+    el.memoDoc.textContent = '';
+    el.btnClock.classList.toggle('is-on', stampsOn());
+    var items = liveOf(loadStore(K_MEMOS).items);
+    if (!items.length) {
+      var e = document.createElement('div');
+      e.className = 'memo-empty';
+      e.textContent = '——';
+      el.memoDoc.appendChild(e);
+      return;
+    }
+    for (var i = 0; i < items.length; i++) {
+      (function (it) {
+        if (stampsOn()) {
+          var ts = document.createElement('div');
+          ts.className = 'memo-ts';
+          ts.textContent = stampOf(it);
+          el.memoDoc.appendChild(ts);
+        }
+        var p = document.createElement('div');
+        p.className = 'memo-item';
+        p.textContent = it.text;
+        p.addEventListener('click', function () { openEdit('memo', it.id, it.text); });
+        el.memoDoc.appendChild(p);
+      })(items[i]);
+    }
+  }
+
+  function addMemo() {
+    var v = el.memoInput.value.trim();
+    if (!v) return;
+    var store = loadStore(K_MEMOS), now = Date.now();
+    store.items.push({ id: newId(), text: v, createdAt: now, edits: [], updatedAt: now });
+    saveStore(K_MEMOS, store);
+    el.memoInput.value = '';
+    renderMemo();
+    window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight));
+    askPat();
+    queueSync('memos');
+  }
+
+  /* ─────────── 笔记 ─────────── */
+
+  function openNotes() {
+    if (!cur) return;
+    renderNotes();
+    el.noteWrap.hidden = false;
+    void el.noteWrap.offsetWidth;
+    el.noteWrap.classList.add('is-on');
+  }
+
+  function closeNotes() {
+    if (el.noteWrap.hidden) return;
+    el.noteWrap.classList.remove('is-on');
+    setTimeout(function () {
+      if (!el.noteWrap.classList.contains('is-on')) el.noteWrap.hidden = true;
+    }, 280);
+    bumpChrome();
+  }
+
+  function renderNotes() {
+    el.noteList.textContent = '';
+    var all = liveOf(loadStore(K_NOTES).items), n = 0;
+    for (var i = 0; i < all.length; i++) {
+      if (!cur || all[i].bookId !== cur.id) continue;
+      n++;
+      (function (it) {
+        var p = document.createElement('div');
+        p.className = 'note-item';
+        p.textContent = it.text;
+        p.addEventListener('click', function () { openEdit('note', it.id, it.text); });
+        el.noteList.appendChild(p);
+      })(all[i]);
+    }
+    if (!n) {
+      var e = document.createElement('div');
+      e.className = 'memo-empty';
+      e.textContent = '——';
+      el.noteList.appendChild(e);
+    }
+  }
+
+  function addNote() {
+    var v = el.noteInput.value.trim();
+    if (!v || !cur) return;
+    var store = loadStore(K_NOTES), now = Date.now();
+    store.items.push({ id: newId(), bookId: cur.id, text: v, createdAt: now, edits: [], updatedAt: now });
+    saveStore(K_NOTES, store);
+    el.noteInput.value = '';
+    renderNotes();
+    el.noteList.scrollTop = el.noteList.scrollHeight;
+    queueSync('notes');
+  }
+
+  /* ─────────── 编辑 / 删除 ─────────── */
+
+  function openEdit(kind, id, text) {
+    editCtx = { kind: kind, id: id };
+    el.editText.value = text || '';
+    el.editWrap.hidden = false;
+    void el.editWrap.offsetWidth;
+    el.editWrap.classList.add('is-on');
+  }
+
+  function closeEdit() {
+    if (el.editWrap.hidden) return;
+    el.editWrap.classList.remove('is-on');
+    setTimeout(function () {
+      if (!el.editWrap.classList.contains('is-on')) el.editWrap.hidden = true;
+    }, 280);
+    editCtx = null;
+  }
+
+  function editKey() { return editCtx && editCtx.kind === 'memo' ? K_MEMOS : K_NOTES; }
+
+  function saveEdit() {
+    if (!editCtx) return;
+    var k = editKey(), store = loadStore(k), now = Date.now(), v = el.editText.value.trim();
+    if (v) {
+      for (var i = 0; i < store.items.length; i++) {
+        if (store.items[i].id !== editCtx.id) continue;
+        store.items[i].text = v;
+        store.items[i].edits = (store.items[i].edits || []).concat([now]);
+        store.items[i].updatedAt = now;
+      }
+      saveStore(k, store);
+    }
+    var kind = editCtx.kind;
+    closeEdit();
+    if (kind === 'memo') { renderMemo(); queueSync('memos'); }
+    else { renderNotes(); queueSync('notes'); }
+  }
+
+  function delEdit() {
+    if (!editCtx) return;
+    var k = editKey(), store = loadStore(k), now = Date.now();
+    for (var i = 0; i < store.items.length; i++) {
+      if (store.items[i].id === editCtx.id) store.items[i] = { id: editCtx.id, deletedAt: now };
+    }
+    saveStore(k, store);
+    var kind = editCtx.kind;
+    closeEdit();
+    if (kind === 'memo') { renderMemo(); queueSync('memos'); }
+    else { renderNotes(); queueSync('notes'); }
+  }
+
+  /* ─────────── 同步（有 PAT 才走网络，无 PAT 则纯本地、不打扰） ─────────── */
+
+  function storeKeyOf(kind) {
+    return kind === 'memos' ? K_MEMOS : kind === 'notes' ? K_NOTES : K_HL;
+  }
+
+  function queueSync(kind) {
+    clearTimeout(syncTimer[kind]);
+    syncTimer[kind] = setTimeout(function () { syncPush(kind); }, SYNC_WAIT);
+  }
+
+  function syncPush(kind) {
+    var pat = ls(K_PAT);
+    if (!pat) return Promise.resolve(null);
+    var k = storeKeyOf(kind);
+    return pushFile({
+      fetchFn: function (u, o) { return fetch(u, o); },
+      url: syncUrl(SYNC_FILE[kind]),
+      pat: pat,
+      items: loadStore(k).items,
+      message: 'sync ' + kind + ' ' + bjt(Date.now())
+    }).then(function (r) {
+      if (r && r.ok) saveStore(k, { v: 1, items: r.items });
+      return r;
+    }, function () { return null; });
+  }
+
+  function syncPullAll() {
+    if (!ls(K_PAT)) return;
+    var kinds = ['memos', 'notes', 'highlights'];
+    for (var i = 0; i < kinds.length; i++) syncPush(kinds[i]);
+  }
+
+  // 首次在备忘录页写入时给一次性内联输入行；跳过后本会话不再打扰
+  function askPat() {
+    if (patAsked || ls(K_PAT)) return;
+    patAsked = true;
+    var row = document.createElement('div');
+    row.className = 'pat-row';
+    var inp = document.createElement('input');
+    inp.className = 'bar-in';
+    inp.type = 'password';
+    inp.autocomplete = 'off';
+    inp.setAttribute('aria-label', 'Token');
+    var okb = document.createElement('button');
+    okb.type = 'button';
+    okb.className = 'bar-btn';
+    okb.setAttribute('aria-label', 'Save');
+    okb.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path d="M5 12.5 10 17.5 19 6.5" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var xb = document.createElement('button');
+    xb.type = 'button';
+    xb.className = 'bar-btn';
+    xb.setAttribute('aria-label', 'Skip');
+    xb.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round"/></svg>';
+    okb.addEventListener('click', function () {
+      var v = inp.value.trim();
+      if (v) { lsSet(K_PAT, v); syncPullAll(); }
+      if (row.parentNode) row.parentNode.removeChild(row);
+    });
+    xb.addEventListener('click', function () { if (row.parentNode) row.parentNode.removeChild(row); });
+    row.appendChild(inp);
+    row.appendChild(okb);
+    row.appendChild(xb);
+    el.memoDoc.insertBefore(row, el.memoDoc.firstChild);
   }
 
   /* ─────────── 进度 / 位置 ─────────── */
@@ -779,14 +1668,23 @@
       }
       clearTimeout(posTimer);
       posTimer = setTimeout(savePos, POS_DEBOUNCE);
+      if (!el.cap.hidden) hideCap();
     } else if (view === 'shelf') {
+      if (searching) return;
       clearTimeout(shelfTimer);
       shelfTimer = setTimeout(saveShelfY, 150);
+    } else if (view === 'topic') {
+      clearTimeout(topicTimer);
+      topicTimer = setTimeout(saveTopicY, 150);
     }
   }
 
   function saveShelfY() {
     try { sessionStorage.setItem(K_SHELF_Y, String(window.pageYOffset || 0)); } catch (e) {}
+  }
+
+  function saveTopicY() {
+    try { sessionStorage.setItem(K_TOPIC_Y, String(window.pageYOffset || 0)); } catch (e) {}
   }
 
   function paintPct() { el.pctLabel.textContent = fmtPct(curPct()); }
@@ -869,14 +1767,19 @@
   function onDown(e) {
     tapArmed = false;
     if (view !== 'read') return;
-    if (el.sheetWrap.hidden === false) return;
+    if (el.sheetWrap.hidden === false || el.noteWrap.hidden === false || el.editWrap.hidden === false) return;
     var t = e.target;
-    if (t && t.closest && t.closest('a,button,.topbar,.bottombar,.sheet,.sheet-backdrop')) return;
+    if (t && t.closest && t.closest('a,button,mark,.topbar,.bottombar,.sheet,.sheet-backdrop,.cap')) return;
     dx0 = e.clientX; dy0 = e.clientY; dt0 = Date.now();
     tapArmed = true;
   }
 
   function onUp(e) {
+    if (view === 'read') {
+      var info = selectionInfo();
+      if (info) { capSel = info; capId = null; showCap(info.rect, false); tapArmed = false; return; }
+      if (!el.cap.hidden && !(e.target && e.target.closest && e.target.closest('.cap'))) hideCap();
+    }
     if (!tapArmed) return;
     tapArmed = false;
     if (Math.abs(e.clientX - dx0) > 10 || Math.abs(e.clientY - dy0) > 10) return;
@@ -997,7 +1900,7 @@
   function schedulePrefetch() {
     if (!('serviceWorker' in navigator) || !BOOKS.length) return;
     var fired = false;
-    var go = function () {
+    var run = function () {
       if (fired) return;
       fired = true;
       var list = [];
@@ -1006,14 +1909,12 @@
         if (reg && reg.active) reg.active.postMessage({ type: 'museum-prefetch', urls: list });
       }).catch(function () {});
     };
-    if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 6000 });
-    else setTimeout(go, 3000);
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 6000 });
+    else setTimeout(run, 3000);
   }
 
   /* ─────────── go ─────────── */
 
-  if (typeof document !== 'undefined') {
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-    else boot();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
 })();

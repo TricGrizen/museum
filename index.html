@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png" type="image/png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="app.css?v=202607301755">
+<link rel="stylesheet" href="app.css?v=202607301907">
 </head>
 <body>
 
@@ -32,12 +32,69 @@
 </section>
 
 <section class="screen shelf" id="scrShelf" hidden>
+  <div class="searchwrap" id="searchWrap">
+    <div class="search">
+      <svg class="search-ico" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M15.8 15.8 20.5 20.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <input class="search-in" id="searchInput" type="text" placeholder="搜索"
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+             enterkeyhint="search" aria-label="Search">
+      <button class="search-x" id="searchClear" type="button" hidden aria-label="Clear">
+        <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </div>
   <div id="books"></div>
+  <div id="hits" hidden></div>
+</section>
+
+<section class="screen topic" id="scrTopic" hidden>
+  <button class="backrow" id="topicBack" type="button" aria-label="Back">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15.5 4.5 8 12l7.5 7.5" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <div id="topicList"></div>
+</section>
+
+<section class="screen memo" id="scrMemo" hidden>
+  <button class="backrow" id="memoBack" type="button" aria-label="Back">
+    <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15.5 4.5 8 12l7.5 7.5" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <div class="memo-doc" id="memoDoc"></div>
 </section>
 
 <section class="screen reader" id="scrRead" hidden>
   <article class="doc" id="doc"></article>
 </section>
+
+<div class="editbar" id="memoBar" hidden>
+  <button class="bar-btn" id="btnClock" type="button" aria-label="Timestamps">
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M12 7.2V12l3.2 2" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <input class="bar-in" id="memoInput" type="text" placeholder=""
+         autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"
+         enterkeyhint="send" aria-label="New">
+  <button class="bar-btn" id="btnMemoSend" type="button" aria-label="Add">
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 19.5V5M5.8 11.2 12 5l6.2 6.2" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+</div>
 
 <div class="chrome" id="chrome" hidden>
   <div class="topbar" id="topbar">
@@ -59,6 +116,14 @@
       <button class="bb-font bb-font-sm" id="btnFontDown" type="button" aria-label="Smaller">A</button>
       <button class="bb-font bb-font-lg" id="btnFontUp" type="button" aria-label="Larger">A</button>
     </div>
+    <button class="bb-note" id="btnNote" type="button" aria-label="Notes">
+      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M20 12.8V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19V5.5A1.5 1.5 0 0 1 5.5 4H12"
+              fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M17.6 3.4 20.6 6.4 14 13H11V10z" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
     <span class="bb-pct" id="pctLabel">0%</span>
   </div>
 </div>
@@ -68,7 +133,50 @@
   <div class="sheet" id="sheet"><nav class="sheet-list" id="sheetList"></nav></div>
 </div>
 
-<script src="marked.min.js?v=202607301755"></script>
-<script src="app.js?v=202607301755"></script>
+<div class="sheet-wrap" id="noteWrap" hidden>
+  <div class="sheet-backdrop" id="noteBackdrop"></div>
+  <div class="sheet sheet-note">
+    <div class="note-list" id="noteList"></div>
+    <div class="editbar editbar-flat" id="noteBar">
+      <input class="bar-in" id="noteInput" type="text" placeholder=""
+             autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"
+             enterkeyhint="send" aria-label="New">
+      <button class="bar-btn" id="btnNoteSend" type="button" aria-label="Add">
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 19.5V5M5.8 11.2 12 5l6.2 6.2" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-wrap" id="editWrap" hidden>
+  <div class="sheet-backdrop" id="editBackdrop"></div>
+  <div class="sheet sheet-edit">
+    <textarea class="edit-area" id="editText" spellcheck="false" aria-label="Edit"></textarea>
+    <div class="edit-btns">
+      <button class="pill" id="btnSave" type="button">保存</button>
+      <button class="pill" id="btnDel" type="button">删除</button>
+    </div>
+  </div>
+</div>
+
+<div class="cap" id="cap" hidden>
+  <button class="cap-dot hl-y" type="button" data-c="y" aria-label="Y"></button>
+  <button class="cap-dot hl-g" type="button" data-c="g" aria-label="G"></button>
+  <button class="cap-dot hl-b" type="button" data-c="b" aria-label="B"></button>
+  <button class="cap-dot hl-p" type="button" data-c="p" aria-label="P"></button>
+  <button class="cap-dot hl-v" type="button" data-c="v" aria-label="V"></button>
+  <button class="cap-del" id="capDel" type="button" hidden aria-label="Remove">
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M6.2 17.8 17.8 6.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </button>
+</div>
+
+<script src="marked.min.js?v=202607301907"></script>
+<script src="app.js?v=202607301907"></script>
 </body>
 </html>

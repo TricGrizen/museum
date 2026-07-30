@@ -248,6 +248,170 @@ svg { display: block; }
   color: var(--label-3);
 }
 
+.row-2 .hit { font-weight: 500; color: var(--label); }
+
+/* 闲聊册：不出分类 token，书名走合成斜体（CJK 上比 font-style 可控） */
+.is-slant {
+  display: inline-block;
+  transform: skewX(-6deg);
+}
+
+.row-chev {
+  flex: none;
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+  color: var(--label-3);
+}
+
+/* ── 搜索场（藏于列表顶部，下拉即现） ─────────── */
+
+.searchwrap {
+  padding: 0 var(--shelf-r) 10px var(--shelf-l);
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--fill);
+}
+
+.search-ico { flex: none; color: var(--label-3); }
+
+.search-in {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--label);
+  font-family: var(--sans);
+  font-size: 16px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.search-in::placeholder { color: var(--label-3); }
+
+.search-x {
+  flex: none;
+  display: flex;
+  align-items: center;
+  color: var(--label-3);
+}
+
+.search-x[hidden] { display: none; }
+
+/* ── 二级页 / 备忘录页 ───────────────────────── */
+
+.topic, .memo {
+  padding: calc(env(safe-area-inset-top) + 8px) 0 calc(env(safe-area-inset-bottom) + 40px);
+}
+
+.memo { padding-bottom: calc(env(safe-area-inset-bottom) + 108px); }
+
+.backrow {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 var(--shelf-r) 0 var(--shelf-l);
+  color: var(--label);
+}
+
+.memo-doc {
+  padding: 6px var(--pad-r) 0 var(--pad-l);
+  font-size: 17px;
+  line-height: 1.8;
+  color: var(--text);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.memo-item { margin-bottom: 14px; white-space: pre-wrap; }
+.memo-item:last-child { margin-bottom: 0; }
+
+.memo-ts {
+  margin-bottom: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--label-3);
+}
+
+.memo-empty { color: var(--label-3); }
+
+.pat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+/* ── 复合输入栏（备忘录常驻底栏 / 笔记 sheet 内） ── */
+
+.editbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px max(12px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 8px) max(12px, env(safe-area-inset-left));
+  border-top: 1px solid var(--hair);
+  background: var(--chrome);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+}
+
+.editbar[hidden] { display: none; }
+
+.editbar-flat {
+  position: static;
+  z-index: auto;
+  padding: 8px var(--pad-r) calc(env(safe-area-inset-bottom) + 10px) var(--pad-l);
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.bar-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--label-2);
+}
+
+.bar-btn.is-on { color: var(--label); }
+
+.bar-in {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  margin: 0;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--fill);
+  color: var(--label);
+  font-family: var(--sans);
+  font-size: 16px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 /* ── 阅读页 ───────────────────────────────────── */
 
 .reader {
@@ -416,6 +580,57 @@ svg { display: block; }
 
 .doc img { max-width: 100%; height: auto; }
 
+/* 标色：内容层色彩（Books 暗色系半透明底），文字色不变 */
+.doc mark {
+  border-radius: 3px;
+  padding: 0 1px;
+  color: inherit;
+}
+
+.hl-y { background: rgba(255, 214, 10, .30); }
+.hl-g { background: rgba(48, 209, 88, .28); }
+.hl-b { background: rgba(10, 132, 255, .28); }
+.hl-p { background: rgba(255, 55, 95, .26); }
+.hl-v { background: rgba(191, 90, 242, .28); }
+
+.cap {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 14px;
+  border: 1px solid var(--hair);
+  border-radius: 22px;
+  background: var(--chrome);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  backdrop-filter: blur(24px) saturate(1.4);
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.cap[hidden] { display: none; }
+.cap.is-on { opacity: 1; transform: none; }
+
+.cap-dot {
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+}
+
+.cap-del {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--label-2);
+}
+
+.cap-del[hidden] { display: none; }
+
 .doc-end {
   margin-top: 3em;
   text-align: center;
@@ -527,6 +742,15 @@ svg { display: block; }
 .bb-font-lg { font-size: 21px; }
 .bb-font[disabled] { color: var(--label-3); }
 
+.bb-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  color: var(--label);
+}
+
 .bb-pct {
   font-size: 13px;
   color: var(--label-2);
@@ -584,3 +808,69 @@ svg { display: block; }
 .sheet-item:last-child { border-bottom: 0; }
 .sheet-item.is-cur { color: var(--label); }
 .sheet-empty { padding: 13px 0; color: var(--label-3); font-size: 15px; }
+
+/* 笔记 sheet：上部条目流可滚，底部复合输入栏 */
+.sheet-note {
+  display: flex;
+  flex-direction: column;
+  height: 62vh;
+  height: 62dvh;
+  overflow: hidden;
+  border-radius: 26px 26px 0 0;
+}
+
+.note-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 20px var(--pad-r) 4px var(--pad-l);
+  font-size: 17px;
+  line-height: 1.8;
+  color: var(--text);
+}
+
+.note-item { margin-bottom: 14px; white-space: pre-wrap; }
+.note-item:last-child { margin-bottom: 0; }
+
+/* 编辑 / 删除 sheet */
+.sheet-edit {
+  height: auto;
+  padding: 20px var(--pad-r) calc(env(safe-area-inset-bottom) + 20px) var(--pad-l);
+  border-radius: 26px 26px 0 0;
+  overflow: visible;
+}
+
+.edit-area {
+  display: block;
+  width: 100%;
+  height: 30vh;
+  margin: 0;
+  padding: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--code);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.7;
+  outline: none;
+  resize: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.edit-btns {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.pill {
+  flex: 1 1 0;
+  height: 44px;
+  border: 1px solid var(--hair);
+  border-radius: 22px;
+  color: var(--label);
+  font-family: var(--sans);
+  font-size: 15px;
+}
