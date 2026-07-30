@@ -370,6 +370,8 @@ img { display: block; border: 0; }
   text-decoration-color: rgba(200, 155, 106, 0.45);
 }
 
+.doc a:active { opacity: 0.55; transition: opacity 150ms ease; }
+
 .doc blockquote {
   margin: 0 0 0.95em;
   padding-left: 14px;
