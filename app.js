@@ -205,6 +205,12 @@
   /* ─────────── 引导 ─────────── */
 
   function boot() {
+    // 不安全上下文没有 crypto.subtle，整个阅读器无法工作 → 先升到 https
+    if (location.protocol === 'http:' &&
+        location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      location.replace('https://' + location.host + location.pathname + location.search + location.hash);
+      return;
+    }
     el.unlock = document.getElementById('scrUnlock');
     el.shelf = document.getElementById('scrShelf');
     el.read = document.getElementById('scrRead');
