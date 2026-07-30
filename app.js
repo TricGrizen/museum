@@ -113,21 +113,95 @@
 
   function fmtPct(pct) { return Math.round(clamp(pct, 0, 1) * 100) + '%'; }
 
-  function fmtWan(chars) { return (Math.max(0, chars || 0) / 10000).toFixed(1); }
-
-  function fmtMD(date) {
-    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
-    return m ? m[2] + '-' + m[3] : String(date || '');
+  // 封面书名：按首个 「——」或「 · 」拆主/副；h1 为空则退回 title
+  function splitTitle(b) {
+    var t = String((b && b.h1) || '').trim();
+    if (!t) t = String((b && b.title) || '').trim();
+    var iDash = t.indexOf('——');
+    var iDot = t.indexOf(' · ');
+    var at = -1, len = 0;
+    if (iDash >= 0 && (iDot < 0 || iDash < iDot)) { at = iDash; len = 2; }
+    else if (iDot >= 0) { at = iDot; len = 3; }
+    if (at <= 0) return { main: t, sub: '' };
+    return { main: t.slice(0, at).trim(), sub: t.slice(at + len).trim() };
   }
 
-  // qcount 为 0 时整段省略「n 问」（不出现「0 问」）
-  function bookMetaLine(b, pct) {
-    var q = (b && b.qcount) || 0;
-    var s = fmtMD(b.date);
-    if (q > 0) s += ' · ' + q + ' 问';
-    s += ' · ' + fmtWan(b.chars) + ' 万字';
-    if (pct != null) s += ' · 已读 ' + fmtPct(pct);
-    return s;
+  // 书架分节：无 group 的档案在前（一节，无节头），其后按出现顺序每个 group 一节
+  function shelfSections(books) {
+    var plain = [], byGroup = {}, order = [], i;
+    for (i = 0; i < (books || []).length; i++) {
+      var b = books[i];
+      if (!b.group) { plain.push(b); continue; }
+      if (!byGroup[b.group]) { byGroup[b.group] = []; order.push(b.group); }
+      byGroup[b.group].push(b);
+    }
+    var out = [];
+    if (plain.length) out.push({ group: null, items: plain });
+    for (i = 0; i < order.length; i++) out.push({ group: order[i], items: byGroup[order[i]] });
+    return out;
+  }
+
+  /* CJK 粗体修复：CommonMark 的 flanking 规则让 `**粗体，**后接汉字` 无法闭合。
+     在 marked 之前把同行内成对的 ** 直接换成 <strong>，代码区一律不碰。 */
+
+  function fenceOf(line) {
+    var m = /^ {0,3}(`{3,}|~{3,})([\s\S]*)$/.exec(line);
+    if (!m) return null;
+    if (m[1].charAt(0) === '`' && m[2].indexOf('`') >= 0) return null;  // ``` 的 info 串不得含反引号
+    return { ch: m[1].charAt(0), len: m[1].length, info: m[2].trim() };
+  }
+
+  function strongify(text) {
+    return text.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  }
+
+  // 行内：先把成对反引号包起来的行内代码换成占位符（内容一字不碰），
+  // 再对整行做 ** 配对，最后还原。
+  // 不能按反引号切段后各段独立配对——一对 ** 跨过行内代码时会被拆成两个孤立
+  // 定界符，进而与相邻的 ** 错配（实测 闲聊/家庭App构想.md 有 3 行如此）。
+  var NUL = '\u0000';
+  var RE_SLOT = new RegExp('\\u0000(\\d+)\\u0000', 'g');
+
+  function fixInlineLine(line) {
+    if (line.indexOf(NUL) >= 0) return line;                   // 占位符字符已在原文里 → 不动
+    var spans = [], out = '', i = 0, n = line.length;
+    while (i < n) {
+      var t = line.indexOf('`', i);
+      if (t < 0) { out += line.slice(i); break; }
+      out += line.slice(i, t);
+      var j = t;
+      while (j < n && line.charAt(j) === '`') j++;
+      var run = j - t, k = j, close = -1;
+      while (k < n) {
+        var p = line.indexOf('`', k);
+        if (p < 0) break;
+        var q = p;
+        while (q < n && line.charAt(q) === '`') q++;
+        if (q - p === run) { close = p; break; }
+        k = q;
+      }
+      if (close < 0) { out += line.slice(t, j); i = j; continue; }   // 未闭合 → 反引号即普通字符
+      out += NUL + spans.length + NUL;                     // 行内代码段 → 占位符
+      spans.push(line.slice(t, close + run));
+      i = close + run;
+    }
+    out = strongify(out);
+    return out.replace(RE_SLOT, function (_, d) { return spans[+d]; });
+  }
+
+  function fixCjkStrong(md) {
+    var lines = String(md == null ? '' : md).split('\n');
+    var fence = null;
+    for (var i = 0; i < lines.length; i++) {
+      var f = fenceOf(lines[i]);
+      if (fence) {
+        if (f && f.ch === fence.ch && f.len >= fence.len && f.info === '') fence = null;
+        continue;                                                   // 围栏内原样
+      }
+      if (f) { fence = f; continue; }
+      lines[i] = fixInlineLine(lines[i]);
+    }
+    return lines.join('\n');
   }
 
   // 文档自身的「目录」不算章节
@@ -143,9 +217,11 @@
   var TEST = {
     slugify: slugify, makeSlugger: makeSlugger, isExternal: isExternal,
     splitHash: splitHash, resolvePath: resolvePath, mapHref: mapHref,
-    pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct, fmtWan: fmtWan,
-    fmtMD: fmtMD, bookMetaLine: bookMetaLine, isChapterHeading: isChapterHeading,
-    isQuotedHeading: isQuotedHeading, FONT_STEPS: FONT_STEPS
+    pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct,
+    splitTitle: splitTitle, shelfSections: shelfSections,
+    fixCjkStrong: fixCjkStrong, fixInlineLine: fixInlineLine, fenceOf: fenceOf,
+    isChapterHeading: isChapterHeading, isQuotedHeading: isQuotedHeading,
+    FONT_STEPS: FONT_STEPS
   };
   if (typeof window !== 'undefined') window.__museum_test = TEST;
   else if (typeof globalThis !== 'undefined') globalThis.__museum_test = TEST;
@@ -194,7 +270,6 @@
   var fontIdx = FONT_DEFAULT;
   var chromeOn = false, chromeTimer = null;
   var posTimer = null, rafPending = false, shelfTimer = null;
-  var shelfStaggered = false;
   var busy = false, pinTimer = null, navBusy = false, activeScreen = null;
   var el = {};
 
@@ -233,12 +308,9 @@
     el.pin = document.getElementById('pin');
     el.pinForm = document.getElementById('pinForm');
     el.unlockBox = document.querySelector('.unlock-box');
-    el.shelfSub = document.getElementById('shelfSub');
-    el.contSlot = document.getElementById('contSlot');
     el.books = document.getElementById('books');
     el.chrome = document.getElementById('chrome');
     el.topbar = document.getElementById('topbar');
-    el.tbTitle = document.getElementById('tbTitle');
     el.btnBack = document.getElementById('btnBack');
     el.btnToc = document.getElementById('btnToc');
     el.btnFontDown = document.getElementById('btnFontDown');
@@ -427,66 +499,50 @@
   /* ─────────── 书架 ─────────── */
 
   function renderShelf() {
-    var maxDate = '';
-    for (var i = 0; i < BOOKS.length; i++) if (BOOKS[i].date > maxDate) maxDate = BOOKS[i].date;
-    el.shelfSub.textContent = BOOKS.length + ' 册' + (maxDate ? ' · 更新至 ' + maxDate : '');
-
-    var stagger = !shelfStaggered;
-    var n = 0;
-
-    el.contSlot.innerHTML = '';
-    var lastId = ls(K_LAST);
-    if (lastId && BY_ID[lastId]) {
-      var lb = BY_ID[lastId];
-      var lp = readPos(lastId);
-      var pct = lp ? lp.pct : 1;
-      var card = document.createElement('button');
-      card.type = 'button';
-      card.className = 'cont' + (stagger ? ' m-in' : '');
-      if (stagger) card.style.animationDelay = (n++ * 30) + 'ms';
-      var t = document.createElement('div');
-      t.className = 'cont-title';
-      t.textContent = lb.title;
-      var bar = document.createElement('div');
-      bar.className = 'cont-bar';
-      var fill = document.createElement('i');
-      fill.style.width = (clamp(pct, 0, 1) * 100).toFixed(2) + '%';
-      bar.appendChild(fill);
-      var p = document.createElement('div');
-      p.className = 'cont-pct';
-      p.textContent = '读到 ' + fmtPct(pct);
-      card.appendChild(t); card.appendChild(bar); card.appendChild(p);
-      card.addEventListener('click', function () { go(lastId); });
-      el.contSlot.appendChild(card);
+    el.books.textContent = '';
+    var secs = shelfSections(BOOKS);
+    for (var s = 0; s < secs.length; s++) {
+      if (secs[s].group) {
+        var head = document.createElement('div');
+        head.className = 'sec-head';
+        head.textContent = secs[s].group;
+        el.books.appendChild(head);
+      }
+      var grid = document.createElement('div');
+      grid.className = 'grid';
+      var items = secs[s].items;
+      for (var i = 0; i < items.length; i++) {
+        (function (b) {
+          var pos = readPos(b.id);
+          var cell = document.createElement('button');
+          cell.type = 'button';
+          cell.className = 'cell';
+          var cover = document.createElement('div');
+          cover.className = 'cover';
+          var parts = splitTitle(b);
+          var t = document.createElement('div');
+          t.className = 'cover-t';
+          t.textContent = parts.main;
+          cover.appendChild(t);
+          if (parts.sub) {
+            var sb = document.createElement('div');
+            sb.className = 'cover-s';
+            sb.textContent = parts.sub;
+            cover.appendChild(sb);
+          }
+          cell.appendChild(cover);
+          if (pos) {
+            var p = document.createElement('div');
+            p.className = 'cell-pct';
+            p.textContent = fmtPct(pos.pct);
+            cell.appendChild(p);
+          }
+          cell.addEventListener('click', function () { go(b.id); });
+          grid.appendChild(cell);
+        })(items[i]);
+      }
+      el.books.appendChild(grid);
     }
-
-    el.books.innerHTML = '';
-    for (var j = 0; j < BOOKS.length; j++) {
-      (function (b) {
-        var pos = readPos(b.id);
-        var card = document.createElement('button');
-        card.type = 'button';
-        card.className = 'book' + (stagger ? ' m-in' : '');
-        if (stagger) card.style.animationDelay = (n++ * 30) + 'ms';
-        var t = document.createElement('div');
-        t.className = 'book-title';
-        t.textContent = b.title;
-        var m = document.createElement('div');
-        m.className = 'book-meta';
-        if (pos) {
-          m.appendChild(document.createTextNode(bookMetaLine(b, null) + ' · 已读 '));
-          var bb = document.createElement('b');
-          bb.textContent = fmtPct(pos.pct);
-          m.appendChild(bb);
-        } else {
-          m.textContent = bookMetaLine(b, null);
-        }
-        card.appendChild(t); card.appendChild(m);
-        card.addEventListener('click', function () { go(b.id); });
-        el.books.appendChild(card);
-      })(BOOKS[j]);
-    }
-    shelfStaggered = true;
   }
 
   function go(id) { location.hash = '#/read/' + id; }
@@ -525,7 +581,6 @@
     loadMd(id).then(function (md) {
       cur = b;
       paintDoc(b, md);
-      el.tbTitle.textContent = b.title;
       var pos = readPos(id);
       var pct = pos ? pos.pct : 0;
       crossFade(fromEl, el.read, function () {
@@ -545,7 +600,7 @@
 
   function paintDoc(b, md) {
     var host = document.createElement('div');
-    host.innerHTML = window.marked.parse(md, { gfm: true, breaks: false, pedantic: false });
+    host.innerHTML = window.marked.parse(fixCjkStrong(md), { gfm: true, breaks: false, pedantic: false });
 
     var slug = makeSlugger();
     var ids = {};
@@ -726,11 +781,11 @@
     el.btnFontUp.disabled = fontIdx >= FONT_STEPS.length - 1;
   }
 
-  // 无章节可列 → 「目录」按钮置灰禁用（同 .bb-font[disabled] 的三级色）
+  // 无章节可列 → 目录按钮置灰禁用（三级色）
   function updateTocBtn() {
     var off = curChapters.length === 0;
     el.btnToc.disabled = off;
-    el.btnToc.style.color = off ? 'var(--ink-3)' : '';
+    el.btnToc.style.color = off ? 'var(--label-3)' : '';
   }
 
   /* ─────────── Chrome ─────────── */

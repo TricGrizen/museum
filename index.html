@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png" type="image/png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="app.css?v=202607300107">
+<link rel="stylesheet" href="app.css?v=202607301702">
 </head>
 <body>
 
@@ -33,11 +33,9 @@
 
 <section class="screen shelf" id="scrShelf" hidden>
   <header class="shelf-head">
-    <h1 class="shelf-title">museum</h1>
-    <div class="shelf-sub" id="shelfSub"></div>
+    <h1 class="shelf-title">书库</h1>
   </header>
-  <div id="contSlot"></div>
-  <div class="books" id="books"></div>
+  <div id="books"></div>
 </section>
 
 <section class="screen reader" id="scrRead" hidden>
@@ -46,16 +44,25 @@
 
 <div class="chrome" id="chrome" hidden>
   <div class="topbar" id="topbar">
-    <button class="tb-back" id="btnBack" type="button">&lsaquo; 书架</button>
-    <div class="tb-title" id="tbTitle"></div>
+    <button class="tb-btn" id="btnBack" type="button" aria-label="Back">
+      <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M15.5 4.5 8 12l7.5 7.5" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <button class="tb-btn" id="btnToc" type="button" aria-label="Contents">
+      <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round"/>
+      </svg>
+    </button>
   </div>
   <div class="bottombar" id="bottombar">
-    <div class="bb-cell"><button class="bb-btn" id="btnToc" type="button">目录</button></div>
-    <div class="bb-cell bb-mid">
-      <button class="bb-font bb-font-sm" id="btnFontDown" type="button" aria-label="缩小字号">A&minus;</button>
-      <button class="bb-font bb-font-lg" id="btnFontUp" type="button" aria-label="放大字号">A＋</button>
+    <div class="bb-fonts">
+      <button class="bb-font bb-font-sm" id="btnFontDown" type="button" aria-label="Smaller">A</button>
+      <button class="bb-font bb-font-lg" id="btnFontUp" type="button" aria-label="Larger">A</button>
     </div>
-    <div class="bb-cell"><span class="bb-pct" id="pctLabel">0%</span></div>
+    <span class="bb-pct" id="pctLabel">0%</span>
   </div>
 </div>
 
@@ -64,7 +71,7 @@
   <div class="sheet" id="sheet"><nav class="sheet-list" id="sheetList"></nav></div>
 </div>
 
-<script src="marked.min.js?v=202607300107"></script>
-<script src="app.js?v=202607300107"></script>
+<script src="marked.min.js?v=202607301702"></script>
+<script src="app.js?v=202607301702"></script>
 </body>
 </html>
