@@ -120,17 +120,27 @@
     return m ? m[2] + '-' + m[3] : String(date || '');
   }
 
+  // qcount 为 0 时整段省略「n 问」（不出现「0 问」）
   function bookMetaLine(b, pct) {
-    var s = fmtMD(b.date) + ' · ' + (b.qcount || 0) + ' 问 · ' + fmtWan(b.chars) + ' 万字';
+    var q = (b && b.qcount) || 0;
+    var s = fmtMD(b.date);
+    if (q > 0) s += ' · ' + q + ' 问';
+    s += ' · ' + fmtWan(b.chars) + ' 万字';
     if (pct != null) s += ' · 已读 ' + fmtPct(pct);
     return s;
+  }
+
+  // 文档自身的「目录」不算章节
+  function isChapterHeading(text) {
+    return String(text == null ? '' : text).trim() !== '目录';
   }
 
   var TEST = {
     slugify: slugify, makeSlugger: makeSlugger, isExternal: isExternal,
     splitHash: splitHash, resolvePath: resolvePath, mapHref: mapHref,
     pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct, fmtWan: fmtWan,
-    fmtMD: fmtMD, bookMetaLine: bookMetaLine, FONT_STEPS: FONT_STEPS
+    fmtMD: fmtMD, bookMetaLine: bookMetaLine, isChapterHeading: isChapterHeading,
+    FONT_STEPS: FONT_STEPS
   };
   if (typeof window !== 'undefined') window.__museum_test = TEST;
   else if (typeof globalThis !== 'undefined') globalThis.__museum_test = TEST;
@@ -540,7 +550,10 @@
       var id = slug(hs[i].textContent || '');
       hs[i].id = id;
       ids[id] = true;
-      if (hs[i].tagName === 'H2') curChapters.push({ id: id, text: (hs[i].textContent || '').trim() });
+      if (hs[i].tagName === 'H2') {
+        var htext = (hs[i].textContent || '').trim();
+        if (isChapterHeading(htext)) curChapters.push({ id: id, text: htext });
+      }
     }
 
     var h1 = host.querySelector('h1');
@@ -586,6 +599,7 @@
     while (host.firstChild) el.doc.appendChild(host.firstChild);
     el.doc.style.fontSize = FONT_STEPS[fontIdx] + 'px';
     updateFontBtns();
+    updateTocBtn();
   }
 
   function fixLink(a, b, ids) {
@@ -705,6 +719,13 @@
   function updateFontBtns() {
     el.btnFontDown.disabled = fontIdx <= 0;
     el.btnFontUp.disabled = fontIdx >= FONT_STEPS.length - 1;
+  }
+
+  // 无章节可列 → 「目录」按钮置灰禁用（同 .bb-font[disabled] 的三级色）
+  function updateTocBtn() {
+    var off = curChapters.length === 0;
+    el.btnToc.disabled = off;
+    el.btnToc.style.color = off ? 'var(--ink-3)' : '';
   }
 
   /* ─────────── Chrome ─────────── */
