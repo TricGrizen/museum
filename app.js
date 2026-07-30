@@ -20,6 +20,12 @@
   var CHECK_PLAIN = 'museum-ok';
   var TAP_BAND = 0.55;                  // 纵向中部 55%
 
+  // 与顶栏返回键同一字形（静态常量，无外部输入）
+  var CHEVRON_SVG =
+    '<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<path d="M15.5 4.5 8 12l7.5 7.5" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
   /* ─────────── 纯函数（node 可直测） ─────────── */
 
   // 保留字母/数字/组合符/下划线/空白/连字符，其余（标点、符号）删除
@@ -113,7 +119,25 @@
 
   function fmtPct(pct) { return Math.round(clamp(pct, 0, 1) * 100) + '%'; }
 
-  // 弱前缀：本身不成书名的分类/序号段，降级为封面眉标而非主名
+  function fmtWan(chars) { return (Math.max(0, chars || 0) / 10000).toFixed(1); }
+
+  function fmtMD(date) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+    return m ? m[2] + '-' + m[3] : String(date || '');
+  }
+
+  // 列表第二行：裸值元数据。档案 `MM-DD · n问 · x.x万字`（qcount=0 省略 n问 段）；
+  // 课程册只给 `x.x万字`（讲次在行首 token，日期不重复）。零描述性文字。
+  function rowMeta(b) {
+    if (!b) return '';
+    var wan = fmtWan(b.chars) + '万字';
+    if (b.group) return wan;
+    var s = fmtMD(b.date);
+    if (b.qcount > 0) s += ' · ' + b.qcount + '问';
+    return s + ' · ' + wan;
+  }
+
+  // 弱前缀：本身不成书名的分类/序号段，降级为行首 token 而非主名
   var WEAK_PREFIX = [/^闲聊$/, /^第\s*\d+\s*[课讲]$/, /^\d{4}-\d{2}-\d{2}$/, /^入门课程$/];
 
   function isWeakPrefix(s) {
@@ -121,8 +145,8 @@
     return false;
   }
 
-  // 封面书名：按首个 「——」或「 · 」拆；左段命中弱前缀 → 左作眉标、右作主名（无副名），
-  // 否则左=主名、右=副名。无分隔符 → 整体主名；h1 为空则退回 title。
+  // 书名拆分：按首个 「——」或「 · 」拆；左段命中弱前缀 → 左作行首 token、右作主名（无副名），
+  // 否则左=主名、右=副名（副名不进列表行）。无分隔符 → 整体主名；h1 为空则退回 title。
   function splitTitle(b) {
     var t = String((b && b.h1) || '').trim();
     if (!t) t = String((b && b.title) || '').trim();
@@ -229,8 +253,8 @@
   var TEST = {
     slugify: slugify, makeSlugger: makeSlugger, isExternal: isExternal,
     splitHash: splitHash, resolvePath: resolvePath, mapHref: mapHref,
-    pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct,
-    splitTitle: splitTitle, shelfSections: shelfSections,
+    pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct, fmtWan: fmtWan, fmtMD: fmtMD,
+    rowMeta: rowMeta, splitTitle: splitTitle, shelfSections: shelfSections,
     fixCjkStrong: fixCjkStrong, fixInlineLine: fixInlineLine, fenceOf: fenceOf,
     isChapterHeading: isChapterHeading, isQuotedHeading: isQuotedHeading,
     FONT_STEPS: FONT_STEPS
@@ -520,46 +544,47 @@
         head.textContent = secs[s].group;
         el.books.appendChild(head);
       }
-      var grid = document.createElement('div');
-      grid.className = 'grid';
+      var list = document.createElement('div');
+      list.className = 'list';
       var items = secs[s].items;
       for (var i = 0; i < items.length; i++) {
         (function (b) {
           var pos = readPos(b.id);
-          var cell = document.createElement('button');
-          cell.type = 'button';
-          cell.className = 'cell';
-          var cover = document.createElement('div');
-          cover.className = 'cover';
           var parts = splitTitle(b);
+          var row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'row';
+
+          var l1 = document.createElement('div');
+          l1.className = 'row-1';
           if (parts.over) {
-            var ov = document.createElement('div');
-            ov.className = 'cover-o';
-            ov.textContent = parts.over;
-            cover.appendChild(ov);
+            var tk = document.createElement('span');
+            tk.className = 'row-token';
+            tk.textContent = parts.over;
+            l1.appendChild(tk);
           }
-          var t = document.createElement('div');
-          t.className = 'cover-t';
+          var t = document.createElement('span');
+          t.className = 'row-title';
           t.textContent = parts.main;
-          cover.appendChild(t);
-          if (parts.sub) {
-            var sb = document.createElement('div');
-            sb.className = 'cover-s';
-            sb.textContent = parts.sub;
-            cover.appendChild(sb);
-          }
-          cell.appendChild(cover);
+          l1.appendChild(t);
           if (pos) {
-            var p = document.createElement('div');
-            p.className = 'cell-pct';
+            var p = document.createElement('span');
+            p.className = 'row-pct';
             p.textContent = fmtPct(pos.pct);
-            cell.appendChild(p);
+            l1.appendChild(p);
           }
-          cell.addEventListener('click', function () { go(b.id); });
-          grid.appendChild(cell);
+
+          var l2 = document.createElement('div');
+          l2.className = 'row-2';
+          l2.textContent = rowMeta(b);
+
+          row.appendChild(l1);
+          row.appendChild(l2);
+          row.addEventListener('click', function () { go(b.id); });
+          list.appendChild(row);
         })(items[i]);
       }
-      el.books.appendChild(grid);
+      el.books.appendChild(list);
     }
   }
 
@@ -669,7 +694,8 @@
     var back = document.createElement('button');
     back.type = 'button';
     back.className = 'doc-back';
-    back.textContent = '书库';
+    back.setAttribute('aria-label', 'Back');
+    back.innerHTML = CHEVRON_SVG;                       // 纯 ‹ 字形，同顶栏，无文字
     back.addEventListener('click', function () { location.hash = '#/'; });
     host.appendChild(back);
 

@@ -171,105 +171,81 @@ svg { display: block; }
   85%      { transform: translateX(-2px); }
 }
 
-/* ── 书架（Books 式双列封面网格） ─────────────── */
+/* ── 书架（极简列表：无标题、无卡片、两行式行） ── */
 
 .shelf {
-  padding: calc(env(safe-area-inset-top) + 24px) var(--shelf-r) calc(env(safe-area-inset-bottom) + 40px) var(--shelf-l);
-}
-
-.shelf-title {
-  margin: 0;
-  font-family: var(--sans);
-  font-size: 34px;
-  font-weight: 700;
-  letter-spacing: -0.4px;
-  line-height: 1.2;
-  color: var(--label);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  column-gap: 20px;
-  row-gap: 28px;
-  margin-top: 24px;
+  padding: calc(env(safe-area-inset-top) + 20px) 0 calc(env(safe-area-inset-bottom) + 40px);
 }
 
 .sec-head {
-  margin: 36px 0 14px;
+  margin: 28px 0 8px;
+  padding: 0 var(--shelf-r) 0 var(--shelf-l);
   font-family: var(--sans);
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.3;
-  color: var(--label);
+  color: var(--label-2);
 }
 
-.sec-head + .grid { margin-top: 0; }
-
-.cell {
+.row {
+  position: relative;
   display: block;
   width: 100%;
+  padding: 11px var(--shelf-r) 11px var(--shelf-l);
   text-align: left;
 }
 
-.cell:active { opacity: 1; }
-
-.cover {
-  aspect-ratio: 2 / 3;
-  padding: 16px;
-  border: 1px solid var(--hair);
-  border-radius: 6px;
-  background: var(--fill);
-  overflow: hidden;
-  transition: opacity 150ms ease, transform 150ms ease;
+.row::after {
+  content: "";
+  position: absolute;
+  left: var(--shelf-l);
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--hair);
 }
 
-.cell:active .cover { opacity: 0.8; transform: scale(0.97); }
+.row:last-child::after { content: none; }
 
-.cover-o {
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 400;
-  letter-spacing: 0.06em;
-  line-height: 1.3;
+.row:active { opacity: 0.55; }
+
+.row-1 {
+  display: flex;
+  align-items: baseline;
+}
+
+.row-token {
+  flex: none;
+  margin-right: 6px;
+  font-size: 15px;
   color: var(--label-2);
+}
+
+.row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--label);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.cover-t {
-  font-family: var(--serif);
-  font-size: 19px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--label);
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.cover-s {
-  margin-top: 8px;
-  font-family: var(--serif);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.45;
+.row-pct {
+  flex: none;
+  margin-left: 12px;
+  font-size: 13px;
   color: var(--label-2);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.cell-pct {
-  margin-top: 8px;
-  font-size: 11px;
-  line-height: 1.2;
-  color: var(--label-2);
-  text-align: left;
   font-variant-numeric: tabular-nums;
+}
+
+.row-2 {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--label-3);
 }
 
 /* ── 阅读页 ───────────────────────────────────── */
@@ -449,16 +425,15 @@ svg { display: block; }
 }
 
 .doc-back {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 44px;
   margin: 22px auto 0;
   padding: 0 24px;
   border: 1px solid var(--hair);
   border-radius: 22px;
   color: var(--label);
-  font-family: var(--sans);
-  font-size: 15px;
-  letter-spacing: 0;
 }
 
 /* 锚点落点提示：单色制下用一层 hairline 底色一闪（不再有点缀色） */
