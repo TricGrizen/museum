@@ -253,7 +253,7 @@ svg { display: block; }
 /* 闲聊册：不出分类 token，书名走合成斜体（CJK 上比 font-style 可控） */
 .is-slant {
   display: inline-block;
-  transform: skewX(-6deg);
+  transform: skewX(-10deg);
 }
 
 .row-chev {

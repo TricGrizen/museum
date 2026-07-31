@@ -211,10 +211,26 @@
   // 闲聊册：不出 token，书名走略斜体
   function isChatBook(b) { return splitTitle(b).over === '闲聊'; }
 
-  // 行首 token：闲聊的分类词不出现，其余弱前缀（日期等）保留
+  // 行首 token：闲聊的分类词与日期前缀都不渲染（拆分照旧剥离它们，只是不上行）
+  var RE_DATE_OVER = /^\d{4}-\d{2}-\d{2}$/;
+
   function rowToken(b) {
     var o = splitTitle(b).over;
-    return o === '闲聊' ? '' : o;
+    if (o === '闲聊' || RE_DATE_OVER.test(o)) return '';
+    return o;
+  }
+
+  // 课程入口行的合计进度：按字数加权（读完 p=1、在读取存档 pct、未读 p=0）
+  function topicPct(items, posOf) {
+    var sum = 0, acc = 0;
+    for (var i = 0; i < (items || []).length; i++) {
+      var c = Math.max(0, (items[i] && items[i].chars) || 0);
+      var p = posOf ? posOf(items[i].id) : null;
+      var v = !p ? 0 : (p.done ? 1 : clamp(Number(p.pct) || 0, 0, 1));
+      sum += c;
+      acc += c * v;
+    }
+    return sum > 0 ? clamp(acc / sum, 0, 1) : 0;
   }
 
   // 分节：无 group 的档案在前，其后按出现顺序每个 group 一节（key 取源前缀，供二级页路由）
@@ -491,7 +507,8 @@
     slugify: slugify, makeSlugger: makeSlugger, isExternal: isExternal,
     splitHash: splitHash, resolvePath: resolvePath, mapHref: mapHref,
     pctToY: pctToY, yToPct: yToPct, fmtPct: fmtPct, fmtWan: fmtWan, fmtMD: fmtMD,
-    rowMeta: rowMeta, topicMeta: topicMeta, splitTitle: splitTitle, shelfSections: shelfSections,
+    rowMeta: rowMeta, topicMeta: topicMeta, topicPct: topicPct,
+    splitTitle: splitTitle, shelfSections: shelfSections,
     isChatBook: isChatBook, rowToken: rowToken,
     fixCjkStrong: fixCjkStrong, fixInlineLine: fixInlineLine, fenceOf: fenceOf,
     isChapterHeading: isChapterHeading, isQuotedHeading: isQuotedHeading,
@@ -911,7 +928,7 @@
     var pos = readPos(b.id);
     return mkRow({
       token: rowToken(b), title: splitTitle(b).main, slant: isChatBook(b),
-      pct: pos ? fmtPct(pos.pct) : '', meta: rowMeta(b),
+      pct: (pos && !pos.done) ? fmtPct(pos.pct) : '', meta: rowMeta(b),
       onTap: function () { go(b.id); }
     });
   }
@@ -934,8 +951,10 @@
     for (i = 0; i < secs.length; i++) {
       if (!secs[i].group) continue;
       (function (sec) {
+        var tp = topicPct(sec.items, readPos);
         list.appendChild(mkRow({
           title: sec.group, meta: topicMeta(sec.items), chevron: true,
+          pct: tp > 0 ? fmtPct(tp) : '',
           onTap: function () { location.hash = '#/topic/' + sec.key; }
         }));
       })(secs[i]);
@@ -1790,7 +1809,8 @@
     if (view !== 'read' || !cur) return;
     var pct = curPct();
     lsSet(K_LAST, cur.id);
-    if (pct >= DONE_PCT) lsDel(K_POS + cur.id);
+    // 读完不再抹掉记录：改记 done，行上不显示百分比，但要计入课程合计
+    if (pct >= DONE_PCT) lsSet(K_POS + cur.id, JSON.stringify({ pct: 1, done: true, t: Date.now() }));
     else lsSet(K_POS + cur.id, JSON.stringify({ pct: pct, t: Date.now() }));
   }
 
