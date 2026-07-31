@@ -28,6 +28,9 @@
   var CTX_LEN = 20;                     // 锚定上下文长度
   var SNIP_LEN = 18;                    // 命中片段前后长度
   var FIND_WAIT = 150;
+  var BAR_HIDE = 4000;                  // 搜索胶囊无交互自隐
+  var BAR_THRESH = 4;                   // 手势方向判定阈值（px）
+  var ARM_WIN = 2000;                   // 垃圾桶两击确认窗口
   var SYNC_WAIT = 3000;
   var SYNC_REPO = 'TricGrizen/museum-sync';
   var SYNC_API = 'https://api.github.com/repos/' + SYNC_REPO + '/contents/';
@@ -393,6 +396,34 @@
     return out;
   }
 
+  /* ── 编辑器语义 / 两击确认 / 手势方向（纯函数） ── */
+
+  // 返回时如何落盘：新建且空 → 丢弃；既有清空 → 墓碑删除；无改动 → 不记 edits
+  function editorAction(o) {
+    var isNew = !!(o && o.isNew);
+    var text = String((o && o.text) || '').trim();
+    var orig = String((o && o.original) || '').trim();
+    if (isNew) return text ? { action: 'create', text: text } : { action: 'discard', text: '' };
+    if (!text) return { action: 'delete', text: '' };
+    if (text === orig) return { action: 'noop', text: text };
+    return { action: 'update', text: text };
+  }
+
+  // 垃圾桶两击确认：首击进入待确认（保持 win 毫秒），窗口内再击执行，超时复原
+  function armStep(armedAt, now, win) {
+    var w = win == null ? ARM_WIN : win;
+    if (armedAt && (now - armedAt) <= w) return { fire: true, armed: false, armedAt: 0 };
+    return { fire: false, armed: true, armedAt: now };
+  }
+
+  // 滚动方向 → 搜索胶囊显隐：向上滑动（scrollY 增大）显，向下滑动隐，抖动不动作
+  function barMove(dy, thresh) {
+    var t = thresh == null ? BAR_THRESH : thresh;
+    if (dy > t) return 'show';
+    if (dy < -t) return 'hide';
+    return 'keep';
+  }
+
   function syncUrl(file) { return SYNC_API + file; }
 
   function newId() {
@@ -466,6 +497,7 @@
     isChapterHeading: isChapterHeading, isQuotedHeading: isQuotedHeading,
     bjt: bjt, stampOf: stampOf, locateQuote: locateQuote, makeSnippet: makeSnippet,
     plainOf: plainOf, mergeItems: mergeItems, liveOf: liveOf, itemTime: itemTime,
+    editorAction: editorAction, armStep: armStep, barMove: barMove,
     syncUrl: syncUrl, pushFile: pushFile, utf8ToB64: utf8ToB64, b64ToUtf8: b64ToUtf8,
     HL_KEYS: HL_KEYS, FONT_STEPS: FONT_STEPS
   };
@@ -509,7 +541,9 @@
   var findTimer = null, findQuery = '', pendingFind = null, searching = false, noteAfterOpen = false;
   var syncTimer = {}, patAsked = false;
   var capSel = null, capId = null, hlOrphans = 0;
-  var editCtx = null;                   // {kind:'memo'|'note', id}
+  var edCtx = null;                     // {kind:'memo'|'note', id, bookId, original, isNew}
+  var edArmed = 0, edArmTimer = null;
+  var barOn = false, barTimer = null, barLastY = 0, searchOn = false;
   var el = {};
 
   function ls(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -557,18 +591,18 @@
     el.doc = $('doc'); el.pin = $('pin'); el.pinForm = $('pinForm');
     el.unlockBox = document.querySelector('.unlock-box');
     el.books = $('books'); el.hits = $('hits');
-    el.searchWrap = $('searchWrap'); el.searchInput = $('searchInput'); el.searchClear = $('searchClear');
+    el.searchBar = $('searchBar'); el.searchPill = $('searchPill');
+    el.searchInput = $('searchInput'); el.searchClear = $('searchClear');
     el.topicList = $('topicList'); el.topicBack = $('topicBack');
     el.memoDoc = $('memoDoc'); el.memoBack = $('memoBack'); el.memoBar = $('memoBar');
-    el.memoInput = $('memoInput'); el.btnClock = $('btnClock'); el.btnMemoSend = $('btnMemoSend');
+    el.btnClock = $('btnClock'); el.btnMemoNew = $('btnMemoNew');
     el.chrome = $('chrome'); el.topbar = $('topbar');
     el.btnBack = $('btnBack'); el.btnToc = $('btnToc'); el.btnNote = $('btnNote');
     el.btnFontDown = $('btnFontDown'); el.btnFontUp = $('btnFontUp'); el.pctLabel = $('pctLabel');
     el.sheetWrap = $('sheetWrap'); el.sheetList = $('sheetList'); el.sheetBackdrop = $('sheetBackdrop');
     el.noteWrap = $('noteWrap'); el.noteList = $('noteList'); el.noteBackdrop = $('noteBackdrop');
-    el.noteInput = $('noteInput'); el.btnNoteSend = $('btnNoteSend');
-    el.editWrap = $('editWrap'); el.editText = $('editText'); el.editBackdrop = $('editBackdrop');
-    el.btnSave = $('btnSave'); el.btnDel = $('btnDel');
+    el.btnNoteNew = $('btnNoteNew');
+    el.editor = $('editor'); el.edArea = $('edArea'); el.edBack = $('edBack'); el.edDel = $('edDel');
     el.cap = $('cap'); el.capDel = $('capDel');
 
     var f = parseInt(ls(K_FONT), 10);
@@ -600,25 +634,25 @@
     el.btnFontUp.addEventListener('click', function () { bumpChrome(); setFont(fontIdx + 1); });
     el.sheetBackdrop.addEventListener('click', closeSheet);
     el.noteBackdrop.addEventListener('click', closeNotes);
-    el.editBackdrop.addEventListener('click', closeEdit);
 
     el.topicBack.addEventListener('click', function () { location.hash = '#/'; });
     el.memoBack.addEventListener('click', function () { location.hash = '#/'; });
 
+    el.searchPill.addEventListener('click', function (e) {
+      if (e.target && e.target.closest && e.target.closest('.search-x')) return;
+      enterSearch();
+    });
+    el.searchInput.addEventListener('focus', enterSearch);
     el.searchInput.addEventListener('input', onSearchInput);
-    el.searchClear.addEventListener('click', clearSearch);
+    el.searchClear.addEventListener('click', function (e) { e.stopPropagation(); clearSearch(); });
 
     el.btnClock.addEventListener('click', toggleStamps);
-    el.btnMemoSend.addEventListener('click', addMemo);
-    el.memoInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); addMemo(); }
+    el.btnMemoNew.addEventListener('click', function () { openEditor('memo', null, ''); });
+    el.btnNoteNew.addEventListener('click', function () {
+      if (cur) openEditor('note', null, cur.id);
     });
-    el.btnNoteSend.addEventListener('click', addNote);
-    el.noteInput.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); addNote(); }
-    });
-    el.btnSave.addEventListener('click', saveEdit);
-    el.btnDel.addEventListener('click', delEdit);
+    el.edBack.addEventListener('click', onEdBack);
+    el.edDel.addEventListener('click', onEdDel);
 
     var dots = el.cap.querySelectorAll('.cap-dot');
     for (var i = 0; i < dots.length; i++) {
@@ -758,7 +792,7 @@
     } else {
       if (h.view !== 'shelf') location.replace('#/');
       renderShelf();
-      crossFade(el.unlock, el.shelf, function () { window.scrollTo(0, searchH()); }, !!fromUnlock);
+      crossFade(el.unlock, el.shelf, function () { window.scrollTo(0, 0); barLastY = 0; }, !!fromUnlock);
       view = 'shelf';
     }
     schedulePrefetch();
@@ -792,7 +826,7 @@
     if (view === 'read') { flushPos(); hideChrome(true); closeSheet(); closeNotes(); hideCap(); }
     if (view === 'topic') { clearTimeout(topicTimer); saveTopicY(); }
     if (view === 'memo') el.memoBar.hidden = true;
-    if (view === 'shelf') { clearTimeout(shelfTimer); saveShelfY(); }
+    if (view === 'shelf') { clearTimeout(shelfTimer); saveShelfY(); killBar(); }   // 搜索胶囊仅首页
   }
 
   function route() {
@@ -833,8 +867,6 @@
   }
 
   /* ─────────── 首页 ─────────── */
-
-  function searchH() { return el.searchWrap ? el.searchWrap.offsetHeight : 0; }
 
   function mkRow(opt) {
     var row = document.createElement('button');
@@ -927,16 +959,55 @@
   function backToShelf() {
     var from = view;
     leaveCur();
+    el.searchInput.value = '';
+    el.searchClear.hidden = true;
+    searchOn = false;
+    showList();
     renderShelf();
     var y = 0;
     try { y = parseInt(sessionStorage.getItem(K_SHELF_Y) || '0', 10) || 0; } catch (e) { y = 0; }
-    if (!y) y = searchH();
     crossFade(screenOf(from), el.shelf, function () {
       var max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
       window.scrollTo(0, Math.min(y, max));
+      barLastY = window.pageYOffset || 0;
     }, false);
     view = 'shelf';
     cur = null;
+  }
+
+  /* ─────────── 搜索胶囊（底部浮动，仅首页） ─────────── */
+
+  function showBar() {
+    el.searchBar.hidden = false;
+    void el.searchBar.offsetWidth;
+    el.searchBar.classList.add('is-on');
+    barOn = true;
+    clearTimeout(barTimer);
+    if (!searchOn) barTimer = setTimeout(hideBar, BAR_HIDE);   // 搜索态不自隐
+  }
+
+  function hideBar() {
+    clearTimeout(barTimer);
+    if (!barOn) return;
+    barOn = false;
+    el.searchBar.classList.remove('is-on');
+    setTimeout(function () { if (!barOn) el.searchBar.hidden = true; }, 280);
+  }
+
+  function killBar() {
+    clearTimeout(barTimer);
+    barOn = false;
+    el.searchBar.classList.remove('is-on');
+    el.searchBar.hidden = true;
+  }
+
+  function enterSearch() {
+    if (view !== 'shelf') return;
+    searchOn = true;
+    clearTimeout(barTimer);
+    showBar();
+    el.searchClear.hidden = false;
+    try { el.searchInput.focus(); } catch (e) {}
   }
 
   /* ─────────── 检索 ─────────── */
@@ -973,10 +1044,13 @@
     el.searchClear.hidden = true;
     clearTimeout(findTimer);
     showList();
+    searchOn = false;
     try { el.searchInput.blur(); } catch (e) {}
+    killBar();
     var y = 0;
     try { y = parseInt(sessionStorage.getItem(K_SHELF_Y) || '0', 10) || 0; } catch (e) { y = 0; }
-    window.scrollTo(0, y || searchH());
+    window.scrollTo(0, y);
+    barLastY = window.pageYOffset || 0;
   }
 
   function findAll(text, term, limit) {
@@ -1460,23 +1534,10 @@
         var p = document.createElement('div');
         p.className = 'memo-item';
         p.textContent = it.text;
-        p.addEventListener('click', function () { openEdit('memo', it.id, it.text); });
+        p.addEventListener('click', function () { openEditor('memo', it, ''); });
         el.memoDoc.appendChild(p);
       })(items[i]);
     }
-  }
-
-  function addMemo() {
-    var v = el.memoInput.value.trim();
-    if (!v) return;
-    var store = loadStore(K_MEMOS), now = Date.now();
-    store.items.push({ id: newId(), text: v, createdAt: now, edits: [], updatedAt: now });
-    saveStore(K_MEMOS, store);
-    el.memoInput.value = '';
-    renderMemo();
-    window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight));
-    askPat();
-    queueSync('memos');
   }
 
   /* ─────────── 笔记 ─────────── */
@@ -1508,7 +1569,7 @@
         var p = document.createElement('div');
         p.className = 'note-item';
         p.textContent = it.text;
-        p.addEventListener('click', function () { openEdit('note', it.id, it.text); });
+        p.addEventListener('click', function () { openEditor('note', it, it.bookId); });
         el.noteList.appendChild(p);
       })(all[i]);
     }
@@ -1520,68 +1581,98 @@
     }
   }
 
-  function addNote() {
-    var v = el.noteInput.value.trim();
-    if (!v || !cur) return;
-    var store = loadStore(K_NOTES), now = Date.now();
-    store.items.push({ id: newId(), bookId: cur.id, text: v, createdAt: now, edits: [], updatedAt: now });
-    saveStore(K_NOTES, store);
-    el.noteInput.value = '';
-    renderNotes();
-    el.noteList.scrollTop = el.noteList.scrollHeight;
-    queueSync('notes');
-  }
+  /* ─────────── 全屏编辑器（备忘录与笔记共用） ─────────── */
 
-  /* ─────────── 编辑 / 删除 ─────────── */
+  function storeOf(kind) { return kind === 'memo' ? K_MEMOS : K_NOTES; }
 
-  function openEdit(kind, id, text) {
-    editCtx = { kind: kind, id: id };
-    el.editText.value = text || '';
-    el.editWrap.hidden = false;
-    void el.editWrap.offsetWidth;
-    el.editWrap.classList.add('is-on');
-  }
-
-  function closeEdit() {
-    if (el.editWrap.hidden) return;
-    el.editWrap.classList.remove('is-on');
+  function openEditor(kind, item, bookId) {
+    edCtx = {
+      kind: kind,
+      id: item ? item.id : null,
+      isNew: !item,
+      bookId: bookId || (item ? item.bookId : ''),
+      original: item ? String(item.text || '') : ''
+    };
+    disarmDel();
+    el.edArea.value = edCtx.original;
+    el.editor.hidden = false;
     setTimeout(function () {
-      if (!el.editWrap.classList.contains('is-on')) el.editWrap.hidden = true;
-    }, 280);
-    editCtx = null;
+      try {
+        el.edArea.focus();
+        var n = el.edArea.value.length;
+        el.edArea.setSelectionRange(n, n);      // 光标置文末
+      } catch (e) {}
+    }, 60);
   }
 
-  function editKey() { return editCtx && editCtx.kind === 'memo' ? K_MEMOS : K_NOTES; }
-
-  function saveEdit() {
-    if (!editCtx) return;
-    var k = editKey(), store = loadStore(k), now = Date.now(), v = el.editText.value.trim();
-    if (v) {
-      for (var i = 0; i < store.items.length; i++) {
-        if (store.items[i].id !== editCtx.id) continue;
-        store.items[i].text = v;
+  // 返回即落盘（语义见 editorAction）
+  function onEdBack() {
+    if (!edCtx) { finishEditor('', false); return; }
+    var r = editorAction({ isNew: edCtx.isNew, original: edCtx.original, text: el.edArea.value });
+    var k = storeOf(edCtx.kind), store = loadStore(k), now = Date.now(), i, changed = false;
+    if (r.action === 'create') {
+      var it = { id: newId(), text: r.text, createdAt: now, edits: [], updatedAt: now };
+      if (edCtx.kind === 'note') it.bookId = edCtx.bookId;
+      store.items.push(it);
+      changed = true;
+    } else if (r.action === 'update') {
+      for (i = 0; i < store.items.length; i++) {
+        if (store.items[i].id !== edCtx.id) continue;
+        store.items[i].text = r.text;
         store.items[i].edits = (store.items[i].edits || []).concat([now]);
         store.items[i].updatedAt = now;
+        changed = true;
       }
-      saveStore(k, store);
+    } else if (r.action === 'delete') {
+      for (i = 0; i < store.items.length; i++) {
+        if (store.items[i].id === edCtx.id) { store.items[i] = { id: edCtx.id, deletedAt: now }; changed = true; }
+      }
     }
-    var kind = editCtx.kind;
-    closeEdit();
-    if (kind === 'memo') { renderMemo(); queueSync('memos'); }
-    else { renderNotes(); queueSync('notes'); }
+    if (changed) saveStore(k, store);
+    finishEditor(edCtx.kind, changed);
   }
 
-  function delEdit() {
-    if (!editCtx) return;
-    var k = editKey(), store = loadStore(k), now = Date.now();
-    for (var i = 0; i < store.items.length; i++) {
-      if (store.items[i].id === editCtx.id) store.items[i] = { id: editCtx.id, deletedAt: now };
+  // 垃圾桶：两击确认，无文字弹窗
+  function onEdDel() {
+    var s = armStep(edArmed, Date.now());
+    if (s.fire) { hardDelete(); return; }
+    edArmed = s.armedAt;
+    el.edDel.classList.add('is-armed');
+    clearTimeout(edArmTimer);
+    edArmTimer = setTimeout(disarmDel, ARM_WIN);
+  }
+
+  function disarmDel() {
+    clearTimeout(edArmTimer);
+    edArmed = 0;
+    if (el.edDel) el.edDel.classList.remove('is-armed');
+  }
+
+  function hardDelete() {
+    if (!edCtx) return;
+    var kind = edCtx.kind, changed = false;
+    if (!edCtx.isNew && edCtx.id) {
+      var k = storeOf(kind), store = loadStore(k), now = Date.now();
+      for (var i = 0; i < store.items.length; i++) {
+        if (store.items[i].id === edCtx.id) { store.items[i] = { id: edCtx.id, deletedAt: now }; changed = true; }
+      }
+      if (changed) saveStore(k, store);
     }
-    saveStore(k, store);
-    var kind = editCtx.kind;
-    closeEdit();
-    if (kind === 'memo') { renderMemo(); queueSync('memos'); }
-    else { renderNotes(); queueSync('notes'); }
+    finishEditor(kind, changed);
+  }
+
+  function finishEditor(kind, changed) {
+    disarmDel();
+    el.editor.hidden = true;
+    try { el.edArea.blur(); } catch (e) {}
+    edCtx = null;
+    if (kind === 'memo') {
+      renderMemo();
+      if (changed) { askPat(); queueSync('memos'); }
+    } else if (kind === 'note') {
+      renderNotes();
+      if (changed) queueSync('notes');
+    }
   }
 
   /* ─────────── 同步（有 PAT 才走网络，无 PAT 则纯本地、不打扰） ─────────── */
@@ -1670,6 +1761,12 @@
       posTimer = setTimeout(savePos, POS_DEBOUNCE);
       if (!el.cap.hidden) hideCap();
     } else if (view === 'shelf') {
+      var y = window.pageYOffset || 0;
+      var d = barMove(y - barLastY);
+      if (d !== 'keep') {
+        barLastY = y;
+        if (!searchOn) { if (d === 'show') showBar(); else hideBar(); }
+      }
       if (searching) return;
       clearTimeout(shelfTimer);
       shelfTimer = setTimeout(saveShelfY, 150);
@@ -1767,7 +1864,7 @@
   function onDown(e) {
     tapArmed = false;
     if (view !== 'read') return;
-    if (el.sheetWrap.hidden === false || el.noteWrap.hidden === false || el.editWrap.hidden === false) return;
+    if (el.sheetWrap.hidden === false || el.noteWrap.hidden === false || el.editor.hidden === false) return;
     var t = e.target;
     if (t && t.closest && t.closest('a,button,mark,.topbar,.bottombar,.sheet,.sheet-backdrop,.cap')) return;
     dx0 = e.clientX; dy0 = e.clientY; dt0 = Date.now();
