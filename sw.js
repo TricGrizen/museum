@@ -1,6 +1,6 @@
 /* museum service worker — 离线 + 更新 */
 
-const BUILD = '202607310242';
+const BUILD = '202608050059';
 const CACHE = 'museum-' + BUILD;
 const NET_TIMEOUT = 3000;
 
